@@ -9,9 +9,16 @@ export const authenticateToken = async (req, res, next) => {
     console.log("Token not received");
     return res.status(401).json({ msg: "No token provided" });
   }
-
+  const secret = process.env.ACCESS_TOKEN_SECRET;
+  if (!secret) {
+    throw new Error("ACCESS_TOKEN_SECRET is not set");
+  }
   try {
-    const user = await jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+    const user = await jwt.verify(token, secret);
+    // Check if the payload returned is correct
+    if (!(typeof user === "object" && "name" in user)) {
+      throw new Error("Invalid token");
+    }
     req.user = user;
     next();
   } catch (error) {
@@ -20,11 +27,25 @@ export const authenticateToken = async (req, res, next) => {
   }
 };
 
-export const authenticateSocketToken = async (token) => {
+export const checkTokenAndSetSocketId = async (token, socketId) => {
+  const secret = process.env.ACCESS_TOKEN_SECRET;
+  if (!secret) {
+    throw new Error("ACCESS_TOKEN_SECRET is not set");
+  }
   try {
-    const user = await jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-    return user;
+    const payload = await jwt.verify(token, secret);
+    if (typeof payload === "object" && "name" in payload) {
+      const user = await User.findOne({ username: payload.name });
+      if (!user) {
+        return false;
+      }
+      user.socketId = socketId;
+      await user.save();
+      return true;
+    }
+    return false;
   } catch (error) {
+    console.log(error);
     return false;
   }
 };
