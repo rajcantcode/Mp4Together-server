@@ -17,7 +17,7 @@ import roomRouter from "./routes/Room.js";
 // Helper functions
 import {
   assignSocket,
-  authenticateSocketToken,
+  checkTokenAndSetSocketId,
   authenticateToken,
 } from "./helpers.js";
 
@@ -66,20 +66,19 @@ async function main() {
 const usernameToSocketId = {};
 // Socket code
 io.on("connection", async (socket) => {
+  // Authenticate socket connection
   const cookies = socket.handshake.headers.cookie;
-  const token = cookies?.split("=")[1];
+  const token = cookies?.split("accessToken=")[1].split(";")[0];
   if (!token) {
     socket.disconnect();
     return;
   }
-  const isValidToken = await authenticateSocketToken(token);
+  const isValidToken = await checkTokenAndSetSocketId(token, socket.id);
   if (!isValidToken) {
     socket.disconnect();
     return;
   }
-  const user = await User.findOne({ username: isValidToken.name });
-  user.socketId = socket.id;
-  await user.save();
+
   // Join a room
   socket.on("join", async ({ room, username }) => {
     socket.join(room);
@@ -194,6 +193,7 @@ io.on("connection", async (socket) => {
   );
 
   socket.on("newVideoUrl", (data) => {
+    console.log("New video url received by server");
     socket.to(data.socketRoomId).emit("transmit-new-video-url", {
       videoUrl: data.videoUrl,
       videoId: data.videoId,
