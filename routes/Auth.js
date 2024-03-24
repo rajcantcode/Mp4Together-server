@@ -9,7 +9,11 @@ import { authenticateToken } from "../helpers.js";
 const router = express.Router();
 
 router
-  .get("/", authenticateToken, returnUser)
+  .get(
+    "/",
+    (req, res, next) => authenticateToken(req, res, next, true),
+    returnUser
+  )
   .post("/signup", createUser)
   .post("/login", loginUser)
   .post("/logout", authenticateToken, logoutUser);
