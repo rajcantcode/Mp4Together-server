@@ -20,6 +20,10 @@ const roomSchema = new mongoose.Schema(
     admins: [
       { type: mongoose.Schema.Types.ObjectId, ref: "user", unique: true },
     ],
+    membersMicState: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
   },
   { timestamps: true }
 );
