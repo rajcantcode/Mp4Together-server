@@ -1,21 +1,21 @@
 import bcrypt from "bcrypt";
 import { User } from "../model/User.js";
 import jwt from "jsonwebtoken";
+import { removeUserFromRoom } from "../helpers.js";
 import {
-  removeUserFromRoom,
-  validateCredentials,
-  authenticateToken,
-} from "../helpers.js";
+  createUserSchema,
+  loginUserSchema,
+} from "../lib/validators/UserSchema.js";
+import Joi from "joi";
 
 export const createUser = async (req, res) => {
   try {
     const { email, password, username } = req.body;
-    if (!validateCredentials(email, password, username)) {
-      return res
-        .status(403)
-        .json({ msg: "Invalid email or username or password" });
+    const { error } = createUserSchema.validate({ email, password, username });
+    if (error) {
+      throw error;
     }
-    const hashedPass = await bcrypt.hash(req.body.password, 10);
+    const hashedPass = await bcrypt.hash(password, 10);
     const newUser = new User({
       email,
       password: hashedPass,
@@ -31,6 +31,8 @@ export const createUser = async (req, res) => {
       } else {
         res.status(409).json({ msg: "Username is already taken" });
       }
+    } else if (Joi.isError(error)) {
+      res.status(403).json({ msg: error.details[0].message });
     } else {
       res.status(501).json({ msg: "Internal server error" });
     }
@@ -40,6 +42,10 @@ export const createUser = async (req, res) => {
 export const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
+    const { error } = loginUserSchema.validate({ email, password });
+    if (error) {
+      throw error;
+    }
     const user = await User.findOne({ email });
     if (!user) {
       res.status(401).json({ msg: "No user with such email exists" });
@@ -73,6 +79,9 @@ export const loginUser = async (req, res) => {
     }
   } catch (error) {
     console.error(`💥💥 Error at /login[post] `, error);
+    if (Joi.isError(error)) {
+      return res.status(403).json({ msg: error.details[0].message });
+    }
     res.status(501).json({ msg: "Internal server error" });
   }
 };
