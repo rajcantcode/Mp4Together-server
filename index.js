@@ -2,14 +2,13 @@ import express from "express";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import http from "http";
-import { nanoid } from "nanoid";
 import cors from "cors";
 import bodyParser from "body-parser";
 import cookieParser from "cookie-parser";
 import { rateLimit } from "express-rate-limit";
 import { Room } from "./model/Room.js";
 import { Server } from "socket.io";
-import { User } from "./model/User.js";
+import helmet from "helmet";
 
 // Import routers
 import authRouter from "./routes/Auth.js";
@@ -17,7 +16,7 @@ import roomRouter from "./routes/Room.js";
 // Helper functions
 import {
   assignSocket,
-  checkTokenAndSetSocketId,
+  checkTokenAndSetUserSocketId,
   authenticateToken,
 } from "./helpers.js";
 
@@ -32,6 +31,9 @@ const io = new Server(server, {
   },
 });
 
+// app.disable("x-powered-by");
+app.use(helmet());
+helmet.hidePoweredBy({ setTo: "deeznuts" });
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(
@@ -57,7 +59,7 @@ app.use(limiter);
 app.use("/auth", authRouter);
 app.use("/room", authenticateToken, roomRouter);
 
-main().catch((err) => console.log(err));
+main().catch((err) => console.error(err));
 
 async function main() {
   await mongoose.connect(process.env.DBLINK);
@@ -73,7 +75,7 @@ io.on("connection", async (socket) => {
     socket.disconnect();
     return;
   }
-  const isValidToken = await checkTokenAndSetSocketId(token, socket.id);
+  const isValidToken = await checkTokenAndSetUserSocketId(token, socket.id);
   if (!isValidToken) {
     socket.disconnect();
     return;
@@ -92,9 +94,7 @@ io.on("connection", async (socket) => {
 
   // Listen for messages
   socket.on("sent-message", (data) => {
-    socket
-      .to(data.room)
-      .emit("receive-message", { ...data.msgObj, key: nanoid(5) });
+    socket.to(data.room).emit("receive-message", { ...data.msgObj });
   });
 
   // Listen when user exits the room
@@ -103,7 +103,6 @@ io.on("connection", async (socket) => {
       const msgObj = {
         type: "notification",
         message: `${data.username} left the room`,
-        key: nanoid(5),
       };
       const room = await Room.findOne({
         mainRoomId: data.mainRoomId,
@@ -124,6 +123,8 @@ io.on("connection", async (socket) => {
           msgObj,
           members: room.members.flatMap(({ username }) => username),
           admins: room.admins.flatMap(({ username }) => username),
+          membersMicState: room.membersMicState,
+          leaver: data.username,
         });
       } else {
         socket.to(data.room).emit("exit-msg", {
@@ -131,7 +132,7 @@ io.on("connection", async (socket) => {
         });
       }
     } catch (error) {
-      console.log(error);
+      console.error(error);
     }
   });
 
@@ -161,7 +162,6 @@ io.on("connection", async (socket) => {
       const msgObj = {
         type: "notification",
         message: `${username} joined the room`,
-        key: nanoid(5),
       };
       const room = await Room.findOne({ mainRoomId })
         .populate("members", "username")
@@ -188,12 +188,36 @@ io.on("connection", async (socket) => {
         msgObj,
         members: room.members.flatMap(({ username }) => username),
         admins: room.admins.flatMap(({ username }) => username),
+        membersMicState: room.membersMicState,
+        joiner: username,
       });
     }
   );
 
+  socket.on(
+    "remove-member",
+    async ({ admin, member, socketRoomId, mainRoomId }, callback) => {
+      try {
+        // Check if the admin is really the admin
+        const room = await Room.findOne({ mainRoomId }).populate("admins");
+
+        // Currently there can only be one admin per room, so this works
+        if (room.admins[0].username !== admin) {
+          callback({ error: { message: "only admins can remove a member" } });
+          return;
+        }
+        if (!usernameToSocketId[socketRoomId][member]) {
+          await assignSocket(usernameToSocketId, socketRoomId, member);
+        }
+        io.to(usernameToSocketId[socketRoomId][member]).emit("exit", { admin });
+      } catch (error) {
+        console.error(error);
+        callback({ error: { message: "server error" } });
+      }
+    }
+  );
+
   socket.on("newVideoUrl", (data) => {
-    console.log("New video url received by server");
     socket.to(data.socketRoomId).emit("transmit-new-video-url", {
       videoUrl: data.videoUrl,
       videoId: data.videoId,
@@ -224,6 +248,21 @@ io.on("connection", async (socket) => {
   socket.on("send-playback-rate", ({ speed, socketRoomId }) => {
     socket.to(socketRoomId).emit("receive-playback-rate", { speed });
   });
+
+  socket.on(
+    "mic-on-off",
+    async ({ username, socketRoomId, roomId, status }) => {
+      try {
+        socket.to(socketRoomId).emit("mic-on-off-event", { username, status });
+        const room = await Room.findOne({ mainRoomId: roomId });
+        room.membersMicState[username] = status;
+        room.markModified("membersMicState");
+        await room.save();
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  );
   socket.on("error", (error) => {
     console.error("Socket error:", error);
   });
