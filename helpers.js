@@ -1,10 +1,17 @@
 import { Room } from "./model/Room.js";
 import { User } from "./model/User.js";
 import jwt from "jsonwebtoken";
+import axios from "axios";
 
 // To authenticate jwt token
-export const authenticateToken = async (req, res, next) => {
+export const authenticateToken = async (req, res, next, setCsp = false) => {
   const token = req.cookies.accessToken;
+  if (setCsp) {
+    res.setHeader(
+      "Content-Security-Policy",
+      `script-src '${process.env.FRONTENDURL}'`
+    );
+  }
   if (!token) {
     console.log("Token not received");
     return res.status(401).json({ msg: "No token provided" });
@@ -27,7 +34,7 @@ export const authenticateToken = async (req, res, next) => {
   }
 };
 
-export const checkTokenAndSetSocketId = async (token, socketId) => {
+export const checkTokenAndSetUserSocketId = async (token, socketId) => {
   const secret = process.env.ACCESS_TOKEN_SECRET;
   if (!secret) {
     throw new Error("ACCESS_TOKEN_SECRET is not set");
@@ -45,7 +52,7 @@ export const checkTokenAndSetSocketId = async (token, socketId) => {
     }
     return false;
   } catch (error) {
-    console.log(error);
+    console.error(error);
     return false;
   }
 };
@@ -98,12 +105,19 @@ export const generateRandomRoomID = async () => {
   return roomId;
 };
 
-export const removeUserFromRoom = async (mainRoomId, userId) => {
+export const removeUserFromRoom = async (
+  mainRoomId,
+  userId,
+  memberToRemove
+) => {
   try {
     // Remove the user from the members array using userId
     const membersUpdateResult = await Room.updateOne(
       { mainRoomId },
-      { $pull: { members: userId } }
+      {
+        $pull: { members: userId },
+        $unset: { [`membersMicState.${memberToRemove}`]: "" },
+      }
     );
 
     // Check if any document was updated in the members array
@@ -122,6 +136,16 @@ export const removeUserFromRoom = async (mainRoomId, userId) => {
     // Fetch the updated room to check if the members array is empty
     const updatedRoom = await Room.findOne({ mainRoomId });
     if (updatedRoom && updatedRoom.members.length === 0) {
+      // Send a request to sfu server Delete the mediasoup router associated with the room
+      await axios.delete(
+        `${process.env.SFU_SERVER_URL}/router/delete/${updatedRoom.socketRoomId}`,
+        {
+          data: {
+            secret: process.env.SFU_SERVER_SECRET,
+          },
+        }
+      );
+
       // If the members array is empty, delete the room
       await Room.deleteOne({ mainRoomId });
       return {
@@ -167,7 +191,13 @@ export const assignSocket = async (usernameToSocket, socketRoom, username) => {
     usernameToSocket[socketRoom][username] = userSocketId;
   }
 };
+
 export const validateCredentials = (email, password, username) => {
+  const validationResult = createUserSchema.validate({
+    email,
+    password,
+    username,
+  });
   // Regular expression pattern for validating email addresses.
   const emailPattern = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/;
 
@@ -179,4 +209,6 @@ export const validateCredentials = (email, password, username) => {
   ) {
     return true;
   }
+
+  return false;
 };
