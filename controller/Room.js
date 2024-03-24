@@ -29,6 +29,7 @@ export const createRoom = async (req, res) => {
       socketRoomId,
       members: [user._id],
       admins: [user._id],
+      membersMicState: { [user.username]: false },
     });
     await newRoom.save();
 
@@ -42,6 +43,7 @@ export const createRoom = async (req, res) => {
       socketRoomId: socketRoomId,
       members: [user.username],
       admins: [user.username],
+      membersMicState: newRoom.membersMicState,
     });
   } catch (error) {
     console.log("error at createRoom[POST], ", { error });
@@ -95,12 +97,15 @@ export const joinRoom = async (req, res) => {
         username: user.username,
         email: user.email,
         videoUrl: room.videoUrl,
+        membersMicState: room.membersMicState,
       });
       return;
     }
 
     // Update the members array of the room collection
     room.members.push(user._id);
+    room.membersMicState[user.username] = false;
+    room.markModified("membersMicState");
     await room.save();
     const updatedRoom = await Room.findOne({ mainRoomId })
       .populate("members", "username")
@@ -116,6 +121,7 @@ export const joinRoom = async (req, res) => {
       username: user.username,
       email: user.email,
       videoUrl: updatedRoom.videoUrl,
+      membersMicState: updatedRoom.membersMicState,
     });
     return;
   } catch (error) {
@@ -134,7 +140,7 @@ export const exitRoom = async (req, res) => {
     console.log(mainRoomId);
 
     // If the operation is successful, the response msg to be sent to the user will be returned by "removeUserFromRoom" function
-    const msg = await removeUserFromRoom(mainRoomId, user._id);
+    const msg = await removeUserFromRoom(mainRoomId, user._id, memberToRemove);
     console.log(msg);
 
     // Set the roomId property of the user to ""
@@ -201,8 +207,6 @@ export const saveUrl = async (req, res) => {
         msg: "Video url saved successfully",
       });
     }
-
-    // Check if request is sent by admin
   } catch (error) {
     if (error instanceof AxiosError) {
       if (error.code === "ERR_BAD_REQUEST") {
