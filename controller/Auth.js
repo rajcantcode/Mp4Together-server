@@ -4,7 +4,8 @@ import jwt from "jsonwebtoken";
 import { removeUserFromRoom } from "../helpers.js";
 import {
   createUserSchema,
-  loginUserSchema,
+  loginUserEmailSchema,
+  loginUserUsernameSchema,
 } from "../lib/validators/UserSchema.js";
 import Joi from "joi";
 
@@ -27,62 +28,81 @@ export const createUser = async (req, res) => {
     console.error(`💥💥 Error at /register[post] `, { error });
     if (error.code === 11000) {
       if (error.keyPattern.email) {
-        res.status(409).json({ msg: "Email is already registered" });
+        res.status(409).json({ message: "Email is already registered" });
       } else {
-        res.status(409).json({ msg: "Username is already taken" });
+        res.status(409).json({ message: "Username is already taken" });
       }
     } else if (Joi.isError(error)) {
-      res.status(403).json({ msg: error.details[0].message });
+      res.status(403).json({ message: error.details[0].message });
     } else {
-      res.status(501).json({ msg: "Internal server error" });
+      res.status(501).json({ message: "Internal server error" });
     }
   }
 };
 
 export const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const { error } = loginUserSchema.validate({ email, password });
-    if (error) {
-      throw error;
-    }
-    const user = await User.findOne({ email });
-    if (!user) {
-      res.status(401).json({ msg: "No user with such email exists" });
+    const { emailOrUsername, password } = req.body;
+    let user;
+    if (emailOrUsername.includes("@")) {
+      const { error } = loginUserEmailSchema.validate({
+        email: emailOrUsername,
+        password,
+      });
+      if (error) throw error;
+      user = await User.findOne({ email: emailOrUsername });
     } else {
-      const hashedPassword = user.password;
-      const match = await bcrypt.compare(password, hashedPassword);
+      const { error } = loginUserUsernameSchema.validate({
+        username: emailOrUsername,
+        password,
+      });
+      if (error) throw error;
+      user = await User.findOne({ username: emailOrUsername });
+    }
 
-      // Incorrect password
-      if (!match) {
-        res.status(401).json({ msg: "Incorrect password" });
+    if (!user) {
+      if (emailOrUsername.includes("@")) {
+        return res
+          .status(401)
+          .json({ message: "No user with such email exists" });
       } else {
-        // Valid login credentials
-        // Generate a token for the user
-        const accessToken = jwt.sign(
-          { name: user.username },
-          process.env.ACCESS_TOKEN_SECRET,
-          { expiresIn: 3600000 * 24 * 7 }
-        );
-        res
-          .status(200)
-          .cookie("accessToken", accessToken, {
-            httpOnly: true,
-            // domain: "localhost",
-            // path: "/",
-            sameSite: "none",
-            secure: true,
-            maxAge: 3600000 * 24 * 7,
-          })
-          .json({ email: user.email, username: user.username });
+        return res
+          .status(401)
+          .json({ message: "No user with such username exists" });
       }
     }
+    const hashedPassword = user.password;
+    const match = await bcrypt.compare(password, hashedPassword);
+
+    // Incorrect password
+    if (!match) {
+      return res.status(401).json({ message: "Incorrect password" });
+    }
+
+    // Valid login credentials
+    // Generate a token for the user
+    const accessToken = jwt.sign(
+      { name: user.username },
+      process.env.ACCESS_TOKEN_SECRET,
+      { expiresIn: 3600000 * 24 * 7 }
+    );
+    res
+      .status(200)
+      .cookie("accessToken", accessToken, {
+        httpOnly: true,
+        // domain: "localhost",
+        // path: "/",
+        sameSite: "none",
+        secure: true,
+        maxAge: 3600000 * 24 * 7,
+      })
+      .json({ email: user.email, username: user.username });
   } catch (error) {
     console.error(`💥💥 Error at /login[post] `, error);
     if (Joi.isError(error)) {
-      return res.status(403).json({ msg: error.details[0].message });
+      return res.status(403).json({ message: error.details[0].message });
     }
-    res.status(501).json({ msg: "Internal server error" });
+    res.status(501).json({ message: "Internal server error" });
   }
 };
 
