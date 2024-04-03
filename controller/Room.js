@@ -181,11 +181,9 @@ export const exitRoom = async (req, res) => {
     const mainRoomId = req.params.id;
     const memberToRemove = req.user.name;
     const user = await User.findOne({ username: memberToRemove });
-    console.log(mainRoomId);
 
     // If the operation is successful, the response msg to be sent to the user will be returned by "removeUserFromRoom" function
     const msg = await removeUserFromRoom(mainRoomId, user._id, memberToRemove);
-    console.log(msg);
 
     // Set the roomId property of the user to ""
     // const user = await User.findOne({ username: memberToRemove });
