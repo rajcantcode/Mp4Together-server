@@ -4,6 +4,7 @@ import { User } from "../model/User.js";
 import { Room } from "../model/Room.js";
 import { nanoid } from "nanoid";
 import axios, { AxiosError } from "axios";
+import redis from "../lib/databases/redis.js";
 export const createRoom = async (req, res) => {
   try {
     // Get username from req, which is passed by middleware
@@ -37,6 +38,31 @@ export const createRoom = async (req, res) => {
     user.roomId = roomId;
     user.room = newRoom._id;
     await user.save();
+
+    // Cache room and user
+    // Removing room property, since we are going to separately cache room anyways
+    const userToCache = {
+      email: user.email,
+      username: user.username,
+      roomId: user.roomId,
+      socketId: user.socketId,
+    };
+    await redis.hset(`user:${user.username}`, userToCache);
+
+    const roomToCache = {
+      mainRoomId: newRoom.mainRoomId,
+      socketRoomId: newRoom.socketRoomId,
+      videoUrl: newRoom.videoUrl,
+      members: [user.username],
+      admins: [user.username],
+      membersMicState: newRoom.membersMicState,
+    };
+    await redis.hset(`room:${newRoom.mainRoomId}`, {
+      ...roomToCache,
+      membersMicState: JSON.stringify(newRoom.membersMicState),
+      members: JSON.stringify([user.username]),
+      admins: JSON.stringify([user.username]),
+    });
 
     res.status(200).json({
       roomId: user.roomId,
@@ -83,6 +109,11 @@ export const joinRoom = async (req, res) => {
     user.room = room._id;
     await user.save();
 
+    // Cache user
+    // Removing room property, since we are going to separately cache room anyways
+    const { room: userRoom, ...userToCache } = user;
+    await redis.hset(`user:${user.username}`, "roomId", room.mainRoomId);
+
     // Check if the user is already present in room, if present return the response
     const isUserInMembers = room.members.some(
       (member) => member.username === username
@@ -107,21 +138,34 @@ export const joinRoom = async (req, res) => {
     room.membersMicState[user.username] = false;
     room.markModified("membersMicState");
     await room.save();
+
     const updatedRoom = await Room.findOne({ mainRoomId })
       .populate("members", "username")
       .populate("admins", "username")
       .exec();
 
-    // Send roomId and socketRoomId in the response
-    res.status(200).json({
+    const roomObjToSend = {
       roomId: updatedRoom.mainRoomId,
       socketRoomId: updatedRoom.socketRoomId,
       members: updatedRoom.members.flatMap(({ username }) => username),
       admins: updatedRoom.admins.flatMap(({ username }) => username),
-      username: user.username,
-      email: user.email,
       videoUrl: updatedRoom.videoUrl,
       membersMicState: updatedRoom.membersMicState,
+    };
+    // Cache room
+    await redis.hset(`room:${updatedRoom.mainRoomId}`, {
+      mainRoomId: updatedRoom.mainRoomId,
+      socketRoomId: updatedRoom.socketRoomId,
+      videoUrl: updatedRoom.videoUrl,
+      members: JSON.stringify(roomObjToSend.members),
+      admins: JSON.stringify(roomObjToSend.admins),
+      membersMicState: JSON.stringify(roomObjToSend.membersMicState),
+    });
+    // Send roomId and socketRoomId in the response
+    res.status(200).json({
+      username: user.username,
+      email: user.email,
+      ...roomObjToSend,
     });
     return;
   } catch (error) {
@@ -149,6 +193,9 @@ export const exitRoom = async (req, res) => {
     user.room = null;
     user.socketId = "";
     await user.save();
+
+    // Cache user
+    await redis.hdel(`user:${user.username}`, "roomId", "socketID");
 
     res.status(200).json({ msg });
   } catch (error) {
@@ -203,6 +250,10 @@ export const saveUrl = async (req, res) => {
       }
       room.videoUrl = videoUrl;
       await room.save();
+
+      // Update room cache
+      await redis.hset(`room:${room.mainRoomId}`, "videoUrl", videoUrl);
+
       return res.status(200).json({
         msg: "Video url saved successfully",
       });
