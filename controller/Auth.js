@@ -2,6 +2,7 @@ import bcrypt from "bcrypt";
 import { User } from "../model/User.js";
 import jwt from "jsonwebtoken";
 import { removeUserFromRoom } from "../helpers.js";
+import redis from "../lib/databases/redis.js";
 import {
   createUserSchema,
   loginUserEmailSchema,
@@ -50,14 +51,16 @@ export const loginUser = async (req, res) => {
         password,
       });
       if (error) throw error;
-      user = await User.findOne({ email: emailOrUsername });
+      user = await User.findOne({ email: emailOrUsername }).select("+password");
     } else {
       const { error } = loginUserUsernameSchema.validate({
         username: emailOrUsername,
         password,
       });
       if (error) throw error;
-      user = await User.findOne({ username: emailOrUsername });
+      user = await User.findOne({ username: emailOrUsername }).select(
+        "+password"
+      );
     }
 
     if (!user) {
@@ -86,6 +89,14 @@ export const loginUser = async (req, res) => {
       process.env.ACCESS_TOKEN_SECRET,
       { expiresIn: 3600000 * 24 * 7 }
     );
+
+    // Cache user in redis
+    await redis.hset(`user:${user.username}`, {
+      email: user.email,
+      username: user.username,
+    });
+    await redis.expire(`user:${user.username}`, 3600 * 24 * 7);
+
     res
       .status(200)
       .cookie("accessToken", accessToken, {
@@ -112,7 +123,9 @@ export const returnUser = async (req, res) => {
     // Get username from req, which is passed by "authenticateToken" middleware
     const username = req.user.name;
     // Verify if such a user exists
-    const user = await User.findOne({ username });
+    const user =
+      (await redis.hgetall(`user:${username}`)) ||
+      (await User.findOne({ username }));
     if (!user) {
       res.status(404).json({ msg: "User not found" });
     } else {
@@ -138,6 +151,9 @@ export const logoutUser = async (req, res) => {
         user.roomId = "";
         user.room = null;
       }
+
+      // Delete user from redis
+      await redis.del(`user:${username}`);
       // Clear the accessToken cookie
       res.setHeader(
         "Set-Cookie",
