@@ -3,6 +3,7 @@ import { User } from "./model/User.js";
 import jwt from "jsonwebtoken";
 import axios from "axios";
 import redis from "./lib/databases/redis.js";
+import { roomToAdmin } from "./index.js";
 
 // To authenticate jwt token
 export const authenticateToken = async (req, res, next, setCsp = false) => {
@@ -50,7 +51,7 @@ export const checkTokenAndSetUserSocketId = async (token, socketId) => {
       user.socketId = socketId;
       await user.save();
       await redis.hset(`user:${user.username}`, "socketId", socketId);
-      return true;
+      return user.username;
     }
     return false;
   } catch (error) {
@@ -154,6 +155,7 @@ export const removeUserFromRoom = async (
       // If the members array is empty, delete the room
       await Room.deleteOne({ mainRoomId });
       await redis.del(`room:${mainRoomId}`);
+      delete roomToAdmin[mainRoomId];
       return {
         msg: "user removed from room successfully and room deleted due to no members",
       };
@@ -163,12 +165,15 @@ export const removeUserFromRoom = async (
     if (updatedRoom && updatedRoom.admins.length === 0) {
       updatedRoom.admins.push(updatedRoom.members[0]._id);
       await updatedRoom.save();
+      roomToAdmin[updatedRoom.mainRoomId] = [updatedRoom.members[0].username];
       await redis.hset(
         `room:${updatedRoom.mainRoomId}`,
         "admins",
         JSON.stringify([updatedRoom.members[0].username]),
         "members",
-        JSON.stringify(updatedRoom.members.flatMap(({ username }) => username))
+        JSON.stringify(updatedRoom.members.flatMap(({ username }) => username)),
+        "membersMicState",
+        JSON.stringify(updatedRoom.membersMicState)
       );
       return {
         msg: `user removed from room successfully, new admin = ${updatedRoom.admins[0]}`,
@@ -181,7 +186,9 @@ export const removeUserFromRoom = async (
       "admins",
       JSON.stringify(updatedRoom.admins.flatMap(({ username }) => username)),
       "members",
-      JSON.stringify(updatedRoom.members.flatMap(({ username }) => username))
+      JSON.stringify(updatedRoom.members.flatMap(({ username }) => username)),
+      "membersMicState",
+      JSON.stringify(updatedRoom.membersMicState)
     );
 
     return { msg: "user removed from room successfully" };
@@ -200,6 +207,7 @@ export const deleteRoomIfNoMembers = async (mainRoomId) => {
     });
     if (room) {
       await redis.del(`room:${room.mainRoomId}`);
+      delete roomToAdmin[room.mainRoomId];
     }
   } catch (error) {
     console.error(error);
@@ -218,6 +226,22 @@ export const assignSocket = async (usernameToSocket, socketRoom, username) => {
     usernameToSocket[socketRoom] = {};
     usernameToSocket[socketRoom][username] = userSocketId;
   }
+};
+
+export const checkUserSocketId = (
+  usernameToSocketId,
+  socketRoomId,
+  username,
+  socketId
+) => {
+  if (!usernameToSocketId[socketRoomId][username]) {
+    assignSocket(usernameToSocketId, socketRoomId, username);
+  }
+  if (usernameToSocketId[socketRoomId][username] !== socketId) {
+    console.log("User is not who they claim to be");
+    return false;
+  }
+  return true;
 };
 
 export const validateCredentials = (email, password, username) => {
@@ -239,4 +263,18 @@ export const validateCredentials = (email, password, username) => {
   }
 
   return false;
+};
+
+export const checkIfAdmin = async (mainRoomId, username) => {
+  if (!roomToAdmin[mainRoomId]) {
+    const redisRoom = await redis.hgetall(`room:${mainRoomId}`);
+    if (Object.keys(redisRoom).length === 0) {
+      const room = await Room.findOne({ mainRoomId });
+      if (!room) return false;
+      roomToAdmin[mainRoomId] = room.admins;
+    } else {
+      roomToAdmin[mainRoomId] = JSON.parse(redisRoom.admins);
+    }
+  }
+  return roomToAdmin[mainRoomId].includes(username);
 };
