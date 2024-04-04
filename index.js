@@ -18,6 +18,8 @@ import {
   assignSocket,
   checkTokenAndSetUserSocketId,
   authenticateToken,
+  checkUserSocketId,
+  checkIfAdmin,
 } from "./helpers.js";
 
 import redis from "./lib/databases/redis.js";
@@ -64,6 +66,8 @@ app.use("/room", authenticateToken, roomRouter);
 connectToMongoose().catch((err) => console.error(err));
 
 const usernameToSocketId = {};
+const tempUsernameToSocketId = {};
+export const roomToAdmin = {};
 // Socket code
 io.on("connection", async (socket) => {
   // Authenticate socket connection
@@ -73,14 +77,22 @@ io.on("connection", async (socket) => {
     socket.disconnect();
     return;
   }
+  // returns username if token is valid, else returns false
   const isValidToken = await checkTokenAndSetUserSocketId(token, socket.id);
   if (!isValidToken) {
     socket.disconnect();
     return;
   }
+  tempUsernameToSocketId[isValidToken] = socket.id;
 
   // Join a room
   socket.on("join", async ({ room, username }) => {
+    if (socket.id !== tempUsernameToSocketId[username]) {
+      console.log("User is not who they claim to be");
+      socket.disconnect();
+      return;
+    }
+    delete tempUsernameToSocketId[username];
     socket.join(room);
     if (usernameToSocketId[room]) {
       usernameToSocketId[room][username] = socket.id;
@@ -91,71 +103,90 @@ io.on("connection", async (socket) => {
   });
 
   // Listen for messages
-  socket.on("sent-message", (data) => {
-    socket.to(data.room).emit("receive-message", { ...data.msgObj });
+  socket.on("sent-message", ({ room, username, msgObj }) => {
+    if (!checkUserSocketId(usernameToSocketId, room, username, socket.id)) {
+      socket.disconnect();
+      return;
+    }
+    socket.to(room).emit("receive-message", { ...msgObj });
   });
 
   // Listen when user exits the room
-  socket.on("exit-room", async (data) => {
-    try {
-      const msgObj = {
-        type: "notification",
-        message: `${data.username} left the room`,
-      };
+  socket.on(
+    "exit-room",
+    async ({ username, mainRoomId, room: socketRoomId }) => {
+      try {
+        if (
+          !checkUserSocketId(
+            usernameToSocketId,
+            socketRoomId,
+            username,
+            socket.id
+          )
+        ) {
+          socket.disconnect();
+          return;
+        }
+        const msgObj = {
+          type: "notification",
+          message: `${username} left the room`,
+        };
 
-      let room;
-      const redisRoom = await redis.hgetall(`room:${data.mainRoomId}`);
-      // hgetAll returns an empty array if the hash does not exist
-      if (Object.keys(redisRoom).length === 0) {
-        room = await Room.findOne({ mainRoomId: data.mainRoomId })
-          .populate("members", "username")
-          .populate("admins", "username")
-          .exec();
-      }
+        let room;
+        const redisRoom = await redis.hgetall(`room:${mainRoomId}`);
+        // hgetAll returns an empty array if the hash does not exist
+        if (Object.keys(redisRoom).length === 0) {
+          room = await Room.findOne({ mainRoomId: mainRoomId })
+            .populate("members", "username")
+            .populate("admins", "username")
+            .exec();
+        }
 
-      if (usernameToSocketId[data.room][data.username]) {
-        delete usernameToSocketId[data.room][data.username];
-      }
-      if (Object.keys(usernameToSocketId[data.room]).length === 0) {
-        delete usernameToSocketId[data.room];
-      }
+        if (usernameToSocketId[socketRoomId][username]) {
+          delete usernameToSocketId[socketRoomId][username];
+        }
+        if (Object.keys(usernameToSocketId[socketRoomId]).length === 0) {
+          delete usernameToSocketId[socketRoomId];
+        }
 
-      // Send the message to other users, that a user exited the room
-      if (room || !(Object.keys(redisRoom).length === 0)) {
-        const response = room
-          ? {
-              msgObj,
-              members: room.members.flatMap(({ username }) => username),
-              admins: room.admins.flatMap(({ username }) => username),
-              membersMicState: room.membersMicState,
-              leaver: data.username,
-            }
-          : {
-              msgObj,
-              members: JSON.parse(redisRoom.members),
-              admins: JSON.parse(redisRoom.admins),
-              membersMicState: JSON.parse(redisRoom.membersMicState),
-              leaver: data.username,
-            };
-        socket.to(data.room).emit("exit-msg", response);
-      } else {
-        socket.to(data.room).emit("exit-msg", {
-          msgObj,
-        });
+        // Send the message to other users, that a user exited the room
+        if (room || !(Object.keys(redisRoom).length === 0)) {
+          const response = room
+            ? {
+                msgObj,
+                members: room.members.flatMap(({ username }) => username),
+                admins: room.admins.flatMap(({ username }) => username),
+                membersMicState: room.membersMicState,
+                leaver: username,
+              }
+            : {
+                msgObj,
+                members: JSON.parse(redisRoom.members),
+                admins: JSON.parse(redisRoom.admins),
+                membersMicState: JSON.parse(redisRoom.membersMicState),
+                leaver: username,
+              };
+          socket.to(socketRoomId).emit("exit-msg", response);
+        } else {
+          socket.to(socketRoomId).emit("exit-msg", {
+            msgObj,
+          });
+        }
+      } catch (error) {
+        console.error(error);
       }
-    } catch (error) {
-      console.error(error);
     }
-  });
+  );
 
   socket.on(
     "send-timestamp",
-    async ({ timestamp, socketRoom, username, admin, execute }) => {
-      if (!usernameToSocketId[socketRoom][username]) {
-        await assignSocket(usernameToSocketId, socketRoom, username);
-      }
-      if (!usernameToSocketId[socketRoom][admin]) {
-        await assignSocket(usernameToSocketId, socketRoom, admin);
+    async ({ timestamp, socketRoom, username, admin, mainRoomId, execute }) => {
+      if (
+        !checkUserSocketId(usernameToSocketId, socketRoom, admin, socket.id) ||
+        !checkIfAdmin(mainRoomId, admin)
+      ) {
+        socket.disconnect();
+        return;
       }
       io.to(usernameToSocketId[socketRoom][username]).emit("timestamp", {
         timestamp,
@@ -171,6 +202,13 @@ io.on("connection", async (socket) => {
   socket.on(
     "join-room",
     async ({ room: socketRoom, username, mainRoomId, admin }) => {
+      if (
+        !checkUserSocketId(usernameToSocketId, socketRoom, username, socket.id)
+      ) {
+        socket.disconnect();
+        return;
+      }
+
       const msgObj = {
         type: "notification",
         message: `${username} joined the room`,
@@ -183,9 +221,6 @@ io.on("connection", async (socket) => {
           .populate("members", "username")
           .populate("admins", "username")
           .exec();
-      }
-      if (!usernameToSocketId[socketRoom][username]) {
-        await assignSocket(usernameToSocketId, socketRoom, username);
       }
       if (!usernameToSocketId[socketRoom][admin]) {
         await assignSocket(usernameToSocketId, socketRoom, admin);
@@ -226,21 +261,18 @@ io.on("connection", async (socket) => {
     "remove-member",
     async ({ admin, member, socketRoomId, mainRoomId }, callback) => {
       try {
-        // Check if the admin is really the admin
-        const redisRoom = await redis.hgetall(`room:${mainRoomId}`);
-        let room;
-        if (Object.keys(redisRoom).length === 0) {
-          room = await Room.findOne({ mainRoomId }).populate("admins");
-        }
-
-        // Currently there can only be one admin per room, so this works
         if (
-          room?.admins[0].username !== admin ||
-          JSON.parse(redisRoom.admins)[0] !== admin
+          !checkUserSocketId(usernameToSocketId, socketRoomId, admin, socket.id)
         ) {
+          socket.disconnect();
+          return;
+        }
+        // Check if the admin is really the admin
+        if (!checkIfAdmin(mainRoomId, admin)) {
           callback({ error: { message: "only admins can remove a member" } });
           return;
         }
+
         if (!usernameToSocketId[socketRoomId][member]) {
           await assignSocket(usernameToSocketId, socketRoomId, member);
         }
@@ -252,24 +284,85 @@ io.on("connection", async (socket) => {
     }
   );
 
-  socket.on("newVideoUrl", (data) => {
-    socket.to(data.socketRoomId).emit("transmit-new-video-url", {
-      videoUrl: data.videoUrl,
-      videoId: data.videoId,
-      startTime: data.startTime,
-    });
-  });
+  socket.on(
+    "newVideoUrl",
+    async ({
+      socketRoomId,
+      videoUrl,
+      videoId,
+      startTime,
+      mainRoomId,
+      username,
+    }) => {
+      if (
+        !checkUserSocketId(
+          usernameToSocketId,
+          socketRoomId,
+          username,
+          socket.id
+        ) ||
+        !checkIfAdmin(mainRoomId, username)
+      ) {
+        return;
+      }
+      socket.to(socketRoomId).emit("transmit-new-video-url", {
+        videoUrl: videoUrl,
+        videoId: videoId,
+        startTime: startTime,
+      });
+    }
+  );
 
-  socket.on("pause-video", ({ socketRoomId }) => {
-    socket.to(socketRoomId).emit("server-pause-video", { tap: "tap" });
-  });
-  socket.on("play-video", ({ socketRoomId, curTimestamp }) => {
-    socket.to(socketRoomId).emit("server-play-video", { curTimestamp });
-  });
+  socket.on(
+    "pause-video",
+    async ({ socketRoomId, username: admin, mainRoomId }) => {
+      if (
+        !checkUserSocketId(
+          usernameToSocketId,
+          socketRoomId,
+          admin,
+          socket.id
+        ) ||
+        !checkIfAdmin(mainRoomId, admin)
+      ) {
+        return;
+      }
+
+      socket.to(socketRoomId).emit("server-pause-video", { tap: "tap" });
+    }
+  );
+  socket.on(
+    "play-video",
+    ({ socketRoomId, curTimestamp, mainRoomId, username }) => {
+      if (
+        !checkUserSocketId(
+          usernameToSocketId,
+          socketRoomId,
+          username,
+          socket.id
+        ) ||
+        !checkIfAdmin(mainRoomId, username)
+      ) {
+        return;
+      }
+      socket.to(socketRoomId).emit("server-play-video", { curTimestamp });
+    }
+  );
 
   socket.on(
     "req-timestamp",
-    async ({ socketRoom, admin, username, execute }) => {
+    async ({ socketRoom, admin, username, execute, mainRoomId }) => {
+      if (
+        !checkUserSocketId(
+          usernameToSocketId,
+          socketRoom,
+          username,
+          socket.id
+        ) ||
+        !checkIfAdmin(mainRoomId, admin)
+      ) {
+        return;
+      }
       if (!usernameToSocketId[socketRoom][admin]) {
         await assignSocket(usernameToSocketId, socketRoom, admin);
       }
@@ -280,14 +373,38 @@ io.on("connection", async (socket) => {
     }
   );
 
-  socket.on("send-playback-rate", ({ speed, socketRoomId }) => {
-    socket.to(socketRoomId).emit("receive-playback-rate", { speed });
-  });
+  socket.on(
+    "send-playback-rate",
+    ({ speed, socketRoomId, mainRoomId, username }) => {
+      if (
+        !checkUserSocketId(
+          usernameToSocketId,
+          socketRoomId,
+          username,
+          socket.id
+        ) ||
+        !checkIfAdmin(mainRoomId, username)
+      ) {
+        return;
+      }
+      socket.to(socketRoomId).emit("receive-playback-rate", { speed });
+    }
+  );
 
   socket.on(
     "mic-on-off",
     async ({ username, socketRoomId, roomId, status }) => {
       try {
+        if (
+          !checkUserSocketId(
+            usernameToSocketId,
+            socketRoomId,
+            username,
+            socket.id
+          )
+        ) {
+          return;
+        }
         socket.to(socketRoomId).emit("mic-on-off-event", { username, status });
         const room = await Room.findOne({ mainRoomId: roomId });
         room.membersMicState[username] = status;
