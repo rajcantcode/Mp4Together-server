@@ -5,6 +5,7 @@ import { Room } from "../model/Room.js";
 import { nanoid } from "nanoid";
 import axios, { AxiosError } from "axios";
 import redis from "../lib/databases/redis.js";
+import { roomToAdmin } from "../index.js";
 export const createRoom = async (req, res) => {
   try {
     // Get username from req, which is passed by middleware
@@ -33,6 +34,7 @@ export const createRoom = async (req, res) => {
       membersMicState: { [user.username]: false },
     });
     await newRoom.save();
+    roomToAdmin[roomId] = [user.username];
 
     // Also save the roomId and room in User collection in DB
     user.roomId = roomId;
