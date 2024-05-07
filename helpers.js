@@ -3,7 +3,7 @@ import { User } from "./model/User.js";
 import jwt from "jsonwebtoken";
 import axios from "axios";
 import redis from "./lib/databases/redis.js";
-import { roomToAdmin } from "./index.js";
+import { roomToAdmin, usernameToSocketId } from "./index.js";
 
 // To authenticate jwt token
 export const authenticateToken = async (req, res, next, setCsp = false) => {
@@ -44,12 +44,15 @@ export const checkTokenAndSetUserSocketId = async (token, socketId) => {
   try {
     const payload = await jwt.verify(token, secret);
     if (typeof payload === "object" && "name" in payload) {
-      const user = await User.findOne({ username: payload.name });
+      const user = await User.findOneAndUpdate(
+        { username: payload.name },
+        { socketId: socketId }
+      );
+
       if (!user) {
         return false;
       }
-      user.socketId = socketId;
-      await user.save();
+
       await redis.hset(`user:${user.username}`, "socketId", socketId);
       return user.username;
     }
@@ -62,86 +65,85 @@ export const checkTokenAndSetUserSocketId = async (token, socketId) => {
 
 // This function is used to generate room id
 export const generateRandomRoomID = async () => {
-  const dictionary = [
-    "cat",
-    "dog",
-    "sun",
-    "moon",
-    "book",
-    "rain",
-    "tree",
-    "bird",
-    "fish",
-    "star",
-    "frog",
-    "rose",
-    "fire",
-    "lake",
-    "wind",
-    "leaf",
-    "snow",
-    "song",
-    "pear",
-    "lamp",
-    "gold",
-    "note",
-    "pink",
-    "blue",
-    "cloud",
-    "ship",
-    "mint",
-    "rosebud",
-    "rock",
-    "jump",
-  ];
+  try {
+    const dictionary1 = [
+      "cat",
+      "dog",
+      "sun",
+      "moon",
+      "book",
+      "rain",
+      "tree",
+      "bird",
+      "fish",
+      "star",
+    ];
 
-  const randomIndex1 = Math.floor(Math.random() * dictionary.length);
-  const randomIndex2 = Math.floor(Math.random() * dictionary.length);
-  const randomIndex3 = Math.floor(Math.random() * dictionary.length);
+    const dictionary2 = [
+      "frog",
+      "rose",
+      "fire",
+      "lake",
+      "wind",
+      "leaf",
+      "snow",
+      "song",
+      "pear",
+      "lamp",
+    ];
+    const dictionary3 = [
+      "gold",
+      "note",
+      "pink",
+      "blue",
+      "cloud",
+      "ship",
+      "mint",
+      "rosebud",
+      "rock",
+      "jump",
+    ];
 
-  const word1 = dictionary[randomIndex1];
-  const word2 = dictionary[randomIndex2];
-  const word3 = dictionary[randomIndex3];
+    const randomIndex1 = Math.floor(Math.random() * dictionary1.length);
+    const randomIndex2 = Math.floor(Math.random() * dictionary2.length);
+    const randomIndex3 = Math.floor(Math.random() * dictionary3.length);
 
-  // You can concatenate the words with hyphens or any other separator
-  const roomId = `${word1}-${word2}-${word3}`;
-  return roomId;
+    const word1 = dictionary1[randomIndex1];
+    const word2 = dictionary2[randomIndex2];
+    const word3 = dictionary3[randomIndex3];
+
+    // concatenate the words with hyphens or any other separator
+    const roomId = `${word1}-${word2}-${word3}`;
+    // Check if the roomId already exists in the database
+    const roomExists = await redis.exists(`room:${roomId}`);
+    if (roomExists === 1) {
+      return await generateRandomRoomID();
+    }
+    return roomId;
+  } catch (error) {
+    console.error(error);
+  }
 };
 
-export const removeUserFromRoom = async (
-  mainRoomId,
-  userId,
-  memberToRemove
-) => {
+export const removeUserFromRoom = async (mainRoomId, memberToRemove) => {
   try {
-    // Remove the user from the members array using userId
-    const membersUpdateResult = await Room.updateOne(
+    const updatedRoom = await Room.findOneAndUpdate(
       { mainRoomId },
       {
-        $pull: { members: userId },
+        $pull: { members: memberToRemove, admins: memberToRemove },
         $unset: { [`membersMicState.${memberToRemove}`]: "" },
-      }
+      },
+      { new: true }
     );
 
     // Check if any document was updated in the members array
     // If document was not updated, that means no member with such username exists
-    if (!membersUpdateResult.modifiedCount > 0) {
+    if (!updatedRoom) {
       throw new Error("No such member exists in the room");
     }
 
-    // Remove the username from the admins array
-    const adminsUpdateResult = await Room.updateOne(
-      { mainRoomId },
-      { $pull: { admins: userId } }
-    );
-
-    // After removing user, if the members array is empty, delete the room from DB
-    // Fetch the updated room to check if the members array is empty
-    const updatedRoom = await Room.findOne({ mainRoomId })
-      .populate("members", "username")
-      .populate("admins", "username")
-      .exec();
-    if (updatedRoom && updatedRoom.members.length === 0) {
+    //  If the members array is empty, delete the room from DB, and send a request to sfu server to delete the mediasoup router associated with the room
+    if (updatedRoom.members.length === 0) {
       // Send a request to sfu server Delete the mediasoup router associated with the room
       await axios.delete(
         `${process.env.SFU_SERVER_URL}/router/delete/${updatedRoom.socketRoomId}`,
@@ -152,7 +154,7 @@ export const removeUserFromRoom = async (
         }
       );
 
-      // If the members array is empty, delete the room
+      // delete the room
       await Room.deleteOne({ mainRoomId });
       await redis.del(`room:${mainRoomId}`);
       delete roomToAdmin[mainRoomId];
@@ -162,16 +164,16 @@ export const removeUserFromRoom = async (
     }
 
     // If there exists members in the room, and the user which was removed now was an admin, and if the admin array is empty, push the first user of the members array in the admin array
-    if (updatedRoom && updatedRoom.admins.length === 0) {
-      updatedRoom.admins.push(updatedRoom.members[0]._id);
+    if (updatedRoom.admins.length === 0) {
+      updatedRoom.admins.push(updatedRoom.members[0]);
       await updatedRoom.save();
-      roomToAdmin[updatedRoom.mainRoomId] = [updatedRoom.members[0].username];
+      roomToAdmin[updatedRoom.mainRoomId] = [updatedRoom.members[0]];
       await redis.hset(
         `room:${updatedRoom.mainRoomId}`,
         "admins",
-        JSON.stringify([updatedRoom.members[0].username]),
+        JSON.stringify([updatedRoom.members[0]]),
         "members",
-        JSON.stringify(updatedRoom.members.flatMap(({ username }) => username)),
+        JSON.stringify(updatedRoom.members),
         "membersMicState",
         JSON.stringify(updatedRoom.membersMicState)
       );
@@ -184,9 +186,9 @@ export const removeUserFromRoom = async (
     await redis.hset(
       `room:${updatedRoom.mainRoomId}`,
       "admins",
-      JSON.stringify(updatedRoom.admins.flatMap(({ username }) => username)),
+      JSON.stringify(updatedRoom.admins),
       "members",
-      JSON.stringify(updatedRoom.members.flatMap(({ username }) => username)),
+      JSON.stringify(updatedRoom.members),
       "membersMicState",
       JSON.stringify(updatedRoom.membersMicState)
     );
@@ -234,11 +236,13 @@ export const checkUserSocketId = (
   username,
   socketId
 ) => {
+  if (!usernameToSocketId[socketRoomId]) {
+    usernameToSocketId[socketRoomId] = {};
+  }
   if (!usernameToSocketId[socketRoomId][username]) {
     assignSocket(usernameToSocketId, socketRoomId, username);
   }
   if (usernameToSocketId[socketRoomId][username] !== socketId) {
-    console.log("User is not who they claim to be");
     return false;
   }
   return true;
@@ -250,19 +254,10 @@ export const validateCredentials = (email, password, username) => {
     password,
     username,
   });
-  // Regular expression pattern for validating email addresses.
-  const emailPattern = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/;
-
-  // This check is used for checking if user has entered all details correctly
-  if (
-    emailPattern.test(email) &&
-    password.length >= 8 &&
-    username.length >= 4
-  ) {
-    return true;
+  if (validationResult.error) {
+    return false;
   }
-
-  return false;
+  return true;
 };
 
 export const checkIfAdmin = async (mainRoomId, username) => {
