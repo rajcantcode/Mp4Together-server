@@ -4,11 +4,14 @@ import jwt from "jsonwebtoken";
 import { removeUserFromRoom } from "../helpers.js";
 import redis from "../lib/databases/redis.js";
 import {
+  changeUsernameSchema,
   createUserSchema,
   loginUserEmailSchema,
   loginUserUsernameSchema,
+  verifyOtpSchema,
 } from "../lib/validators/UserSchema.js";
 import Joi from "joi";
+import nodemailer from "nodemailer";
 
 export const createUser = async (req, res) => {
   try {
@@ -24,7 +27,12 @@ export const createUser = async (req, res) => {
       username,
     });
     await newUser.save();
-    res.status(201).json({ msg: "User registered successfully" });
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    await redis.set(`otp:${newUser.email}`, otp, "EX", 300);
+    const messageId = await sendOtpToEmail(newUser.email, otp);
+
+    return res.status(201).json({ email: newUser.email });
   } catch (error) {
     console.error(`💥💥 Error at /register[post] `, { error });
     if (error.code === 11000) {
@@ -36,6 +44,112 @@ export const createUser = async (req, res) => {
     } else if (Joi.isError(error)) {
       res.status(403).json({ message: error.details[0].message });
     } else {
+      res.status(501).json({ message: "Internal server error" });
+    }
+  }
+};
+
+const sendOtpToEmail = async (email, otp) => {
+  try {
+    const transport = nodemailer.createTransport({
+      host: "sandbox.smtp.mailtrap.io",
+      port: 2525,
+      auth: {
+        user: "67ca2880f4c82e",
+        pass: "70ce85e21123bf",
+      },
+    });
+
+    const message = await transport.sendMail({
+      from: process.env.MAILSENDER,
+      to: email,
+      subject: "Verification code for mp4together",
+      text: `Your verification code is ${otp}`,
+    });
+
+    return message.messageId;
+  } catch (error) {
+    console.error(error);
+    throw error;
+  }
+};
+
+export const resendOtp = async (req, res) => {
+  try {
+    const { email } = req.body;
+    const { error } = verifyOtpSchema.validate({ email });
+    if (error) throw error;
+    const user = await User.findOne({ email });
+    if (!user || user.verified) {
+      return res
+        .status(404)
+        .json({ message: "User not found or already verified" });
+    }
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    await redis.set(`otp:${email}`, otp, "EX", 300);
+    const messageId = await sendOtpToEmail(email, otp);
+    return res.status(200).json({ message: "OTP sent successfully" });
+  } catch (error) {
+    if (Joi.isError(error)) {
+      return res.status(403).json({ message: error.details[0].message });
+    } else {
+      console.error(`💥💥 Error at /verifyOtp[post] `, error);
+      res.status(501).json({ message: "Internal server error" });
+    }
+  }
+};
+
+export const verifyOtp = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    const { error } = verifyOtpSchema.validate({ email });
+    if (error) throw error;
+
+    const savedOtp = await redis.get(`otp:${email}`);
+    if (!savedOtp) {
+      return res.status(401).json({ message: "OTP expired" });
+    }
+    if (savedOtp !== otp) {
+      return res.status(401).json({ message: "Invalid OTP" });
+    }
+    const user = await User.updateOne({ email }, { verified: true });
+    await redis.del(`otp:${email}`);
+
+    if (req.body.sendUserDetails) {
+      const user = await User.findOne({ email });
+      const accessToken = jwt.sign(
+        { name: user.username },
+        process.env.ACCESS_TOKEN_SECRET,
+        { expiresIn: 3600000 * 24 * 7 }
+      );
+
+      // Cache user in redis
+      const pipeline = redis.pipeline();
+      pipeline.hset(`user:${user.username}`, {
+        email: user.email,
+        username: user.username,
+      });
+      pipeline.expire(`user:${user.username}`, 3600 * 24 * 7);
+      await pipeline.exec();
+
+      return res
+        .status(200)
+        .cookie("accessToken", accessToken, {
+          httpOnly: true,
+          // domain: "localhost",
+          // path: "/",
+          sameSite: "none",
+          secure: true,
+          maxAge: 3600000 * 24 * 7,
+        })
+        .json({ email: user.email, username: user.username });
+    }
+    return res.status(200).json({ message: "OTP verified successfully" });
+  } catch (error) {
+    if (Joi.isError(error)) {
+      return res.status(403).json({ message: error.details[0].message });
+    } else {
+      console.error(`💥💥 Error at /verifyOtp[post] `, error);
       res.status(501).json({ message: "Internal server error" });
     }
   }
@@ -83,6 +197,14 @@ export const loginUser = async (req, res) => {
     }
 
     // Valid login credentials
+
+    // Check if user is verified
+    // if (!user.verified) {
+    //   const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    //   await redis.set(`otp:${user.email}`, otp, "EX", 300);
+    //   const messageId = await sendOtpToEmail(user.email, otp);
+    //   return res.status(401).json({ email: user.email });
+    // }
     // Generate a token for the user
     const accessToken = jwt.sign(
       { name: user.username },
@@ -91,11 +213,13 @@ export const loginUser = async (req, res) => {
     );
 
     // Cache user in redis
-    await redis.hset(`user:${user.username}`, {
+    const pipeline = redis.pipeline();
+    pipeline.hset(`user:${user.username}`, {
       email: user.email,
       username: user.username,
     });
-    await redis.expire(`user:${user.username}`, 3600 * 24 * 7);
+    pipeline.expire(`user:${user.username}`, 3600 * 24 * 7);
+    await pipeline.exec();
 
     res
       .status(200)
@@ -117,26 +241,6 @@ export const loginUser = async (req, res) => {
   }
 };
 
-// This function is similar to "loginUser", the only difference is that we are not checking the password, since it is token based authentication, and also we are not sending a jwt token in response, cause it is token based authentication.
-export const returnUser = async (req, res) => {
-  try {
-    // Get username from req, which is passed by "authenticateToken" middleware
-    const username = req.user.name;
-    // Verify if such a user exists
-    const user =
-      (await redis.hgetall(`user:${username}`)) ||
-      (await User.findOne({ username }));
-    if (!user) {
-      res.status(404).json({ msg: "User not found" });
-    } else {
-      res.status(200).json({ email: user.email, username: user.username });
-    }
-  } catch (error) {
-    console.error(`💥💥 Error at /auth[GET] `, error);
-    res.status(501).json({ msg: "Internal server error" });
-  }
-};
-
 export const logoutUser = async (req, res) => {
   try {
     // Get username from req, which is passed by "authenticateToken" middleware
@@ -146,7 +250,7 @@ export const logoutUser = async (req, res) => {
     if (!user) {
       res.status(404).json({ msg: "User not found" });
     } else {
-      if (user.roomId !== "") {
+      if (user.roomId && user.roomId !== "") {
         await removeUserFromRoom(user.roomId, user.username);
         user.roomId = "";
         user.room = null;
@@ -154,18 +258,14 @@ export const logoutUser = async (req, res) => {
 
       // Delete user from redis
       await redis.del(`user:${username}`);
-      // Clear the accessToken cookie
       res.setHeader(
         "Set-Cookie",
-        cookie.serialize("accessToken", "", {
-          expires: new Date(0), // Set the expiration date to a past date
-          path: "/", // Make sure to set the same path as the original cookie
-          httpOnly: true, // Ensure httpOnly flag is set
-        })
+        `accessToken=; Expires=${new Date(0).toUTCString()}; Path=/; HttpOnly`
       );
+      res.status(200).json({ msg: "Logged out successfully" });
     }
   } catch (error) {
-    console.log("Error at /logout[POST]", error);
+    console.error("Error at /logout[POST]", error);
     res.status(501).json({ msg: "Internal server error" });
   }
 };
