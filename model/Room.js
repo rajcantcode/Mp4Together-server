@@ -14,12 +14,8 @@ const roomSchema = new mongoose.Schema(
     videoUrl: {
       type: String,
     },
-    members: [
-      { type: mongoose.Schema.Types.ObjectId, ref: "user", unique: true },
-    ],
-    admins: [
-      { type: mongoose.Schema.Types.ObjectId, ref: "user", unique: true },
-    ],
+    members: [String],
+    admins: [String],
     membersMicState: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
