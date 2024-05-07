@@ -16,6 +16,10 @@ const userSchema = new mongoose.Schema(
       required: true,
       unique: true,
     },
+    verified: {
+      type: Boolean,
+      default: false,
+    },
     roomId: String,
     room: { type: mongoose.Schema.Types.ObjectId, ref: "room" },
     socketId: String,
