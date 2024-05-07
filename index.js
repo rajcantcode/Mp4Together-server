@@ -13,6 +13,7 @@ import helmet from "helmet";
 // Import routers
 import authRouter from "./routes/Auth.js";
 import roomRouter from "./routes/Room.js";
+import userRouter from "./routes/User.js";
 // Helper functions
 import {
   assignSocket,
@@ -62,15 +63,18 @@ const limiter = rateLimit({
 app.use(limiter);
 app.use("/auth", authRouter);
 app.use("/room", authenticateToken, roomRouter);
+app.use("/user", authenticateToken, userRouter);
 
 connectToMongoose().catch((err) => console.error(err));
 
-const usernameToSocketId = {};
+export const usernameToSocketId = {};
 const tempUsernameToSocketId = {};
 export const roomToAdmin = {};
 // Socket code
 io.on("connection", async (socket) => {
   // Authenticate socket connection
+  let socketUser;
+  let socketUserRoom;
   const cookies = socket.handshake.headers.cookie;
   const token = cookies?.split("accessToken=")[1].split(";")[0];
   if (!token) {
@@ -88,11 +92,10 @@ io.on("connection", async (socket) => {
   // Join a room
   socket.on("join", async ({ room, username }) => {
     if (socket.id !== tempUsernameToSocketId[username]) {
-      console.log("User is not who they claim to be");
       socket.disconnect();
       return;
     }
-    delete tempUsernameToSocketId[username];
+    // delete tempUsernameToSocketId[username];
     socket.join(room);
     if (usernameToSocketId[room]) {
       usernameToSocketId[room][username] = socket.id;
@@ -100,6 +103,9 @@ io.on("connection", async (socket) => {
       usernameToSocketId[room] = {};
       usernameToSocketId[room][username] = socket.id;
     }
+    await redis.hset(`user:${username}`, "socketId", socket.id);
+    socketUser = username;
+    socketUserRoom = room;
   });
 
   // Listen for messages
@@ -132,14 +138,10 @@ io.on("connection", async (socket) => {
           message: `${username} left the room`,
         };
 
-        let room;
-        const redisRoom = await redis.hgetall(`room:${mainRoomId}`);
+        let room = await redis.hgetall(`room:${mainRoomId}`);
         // hgetAll returns an empty array if the hash does not exist
-        if (Object.keys(redisRoom).length === 0) {
-          room = await Room.findOne({ mainRoomId: mainRoomId })
-            .populate("members", "username")
-            .populate("admins", "username")
-            .exec();
+        if (Object.keys(room).length === 0) {
+          room = await Room.findOne({ mainRoomId: mainRoomId });
         }
 
         if (usernameToSocketId[socketRoomId][username]) {
@@ -150,20 +152,20 @@ io.on("connection", async (socket) => {
         }
 
         // Send the message to other users, that a user exited the room
-        if (room || !(Object.keys(redisRoom).length === 0)) {
-          const response = room
+        if (room) {
+          const response = room._id
             ? {
                 msgObj,
-                members: room.members.flatMap(({ username }) => username),
-                admins: room.admins.flatMap(({ username }) => username),
+                members: room.members,
+                admins: room.admins,
                 membersMicState: room.membersMicState,
                 leaver: username,
               }
             : {
                 msgObj,
-                members: JSON.parse(redisRoom.members),
-                admins: JSON.parse(redisRoom.admins),
-                membersMicState: JSON.parse(redisRoom.membersMicState),
+                members: JSON.parse(room.members),
+                admins: JSON.parse(room.admins),
+                membersMicState: JSON.parse(room.membersMicState),
                 leaver: username,
               };
           socket.to(socketRoomId).emit("exit-msg", response);
@@ -172,6 +174,7 @@ io.on("connection", async (socket) => {
             msgObj,
           });
         }
+        socket.leave(socketRoomId);
       } catch (error) {
         console.error(error);
       }
@@ -208,26 +211,21 @@ io.on("connection", async (socket) => {
         socket.disconnect();
         return;
       }
-
       const msgObj = {
         type: "notification",
         message: `${username} joined the room`,
       };
 
-      let room;
-      const redisRoom = await redis.hgetall(`room:${mainRoomId}`);
-      if (Object.keys(redisRoom).length === 0) {
-        room = await Room.findOne({ mainRoomId })
-          .populate("members", "username")
-          .populate("admins", "username")
-          .exec();
+      let room = await redis.hgetall(`room:${mainRoomId}`);
+      if (Object.keys(room).length === 0) {
+        room = await Room.findOne({ mainRoomId });
       }
       if (!usernameToSocketId[socketRoom][admin]) {
         await assignSocket(usernameToSocketId, socketRoom, admin);
       }
 
       // Send a socket event to admin to get the current timestamp of video, if video exists
-      if (room?.videoUrl || redisRoom.videoUrl) {
+      if (room.videoUrl) {
         io.to(usernameToSocketId[socketRoom][admin]).emit("get-timestamp", {
           requester: username,
         });
@@ -237,19 +235,20 @@ io.on("connection", async (socket) => {
         });
       }
 
-      const response = room
+      // Checking if the room is obtained from database or cache
+      const response = room._id
         ? {
             msgObj,
-            members: room.members.flatMap(({ username }) => username),
-            admins: room.admins.flatMap(({ username }) => username),
+            members: room.members,
+            admins: room.admins,
             membersMicState: room.membersMicState,
             joiner: username,
           }
         : {
             msgObj,
-            members: JSON.parse(redisRoom.members),
-            admins: JSON.parse(redisRoom.admins),
-            membersMicState: JSON.parse(redisRoom.membersMicState),
+            members: JSON.parse(room.members),
+            admins: JSON.parse(room.admins),
+            membersMicState: JSON.parse(room.membersMicState),
             joiner: username,
           };
       // Send the message to other users, that a user joined the room
@@ -393,9 +392,16 @@ io.on("connection", async (socket) => {
 
   socket.on(
     "mic-on-off",
-    async ({ username, socketRoomId, roomId, status }) => {
+    async ({ username, admin, socketRoomId, roomId, status }) => {
       try {
         if (
+          admin &&
+          !checkUserSocketId(usernameToSocketId, socketRoomId, admin, socket.id)
+        ) {
+          return;
+        }
+        if (
+          !admin &&
           !checkUserSocketId(
             usernameToSocketId,
             socketRoomId,
@@ -406,10 +412,14 @@ io.on("connection", async (socket) => {
           return;
         }
         socket.to(socketRoomId).emit("mic-on-off-event", { username, status });
-        const room = await Room.findOne({ mainRoomId: roomId });
-        room.membersMicState[username] = status;
-        room.markModified("membersMicState");
-        await room.save();
+        const room = await Room.findOneAndUpdate(
+          { mainRoomId: roomId },
+          { $set: { "membersMicState.$[username]": status } },
+          {
+            new: true,
+            arrayFilters: [{ username: username }],
+          }
+        );
         await redis.hset(
           `room:${roomId}`,
           "membersMicState",
@@ -425,15 +435,10 @@ io.on("connection", async (socket) => {
   });
   socket.on("disconnect", (e) => {
     console.log("A user disconnected", { e });
+    console.log(`${socketUser} disconnected`);
   });
 });
 
 server.listen(process.env.PORT, () => {
   console.log("listening on *:", process.env.PORT);
-});
-
-app.get("/clients", (req, res) => {
-  const connectedClientsCount = io.sockets.sockets.size;
-  console.log("Sent clients");
-  res.json({ connectedClients: connectedClientsCount });
 });
