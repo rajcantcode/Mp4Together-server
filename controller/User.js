@@ -9,39 +9,38 @@ export const returnUser = async (req, res) => {
     // Get username from req, which is passed by "authenticateToken" middleware
     console.log("In returnUser");
     const username = req.user.name;
+    const guest = req.user.guest;
     console.log("finding ", username);
     // Verify if such a user exists
     // Check in redis cache
-    let user = await redis.hgetall(`user:${username}`);
+    let user = await redis.hgetall(`${guest ? "guest" : "user"}:${username}`);
     // If not in cache, check in database
     if (Object.keys(user).length === 0) {
       user = await User.findOne({ username });
       if (!user) {
         return res.status(404).json({ msg: "User not found" });
       }
-
-      // await redis.hset(`user:${username}`, {
-      //   email: user.email,
-      //   username: user.username,
-      // });
-      // await redis.expire(`user:${username}`, 3600 * 24 * 7);
       const pipeline = redis.pipeline();
 
-      pipeline.hset(`user:${username}`, {
-        email: user.email,
-        username: user.username,
-      });
-
-      pipeline.expire(`user:${username}`, 3600 * 24 * 7);
-
-      await pipeline.exec();
-      return res
-        .status(200)
-        .json({ email: user.email, username: user.username });
-    } else {
-      console.log("User found, ", user);
-      res.status(200).json({ email: user.email, username: user.username });
+      if (user.guest) {
+        pipeline.hset(`guest:${user.username}`, {
+          email: user.email,
+          username: user.username,
+        });
+        pipeline.expire(`guest:${user.username}`, 3600);
+        await pipeline.exec();
+      } else {
+        pipeline.hset(`user:${user.username}`, {
+          email: user.email,
+          username: user.username,
+        });
+        pipeline.expire(`user:${user.username}`, 3600 * 24 * 7);
+        await pipeline.exec();
+      }
     }
+    res
+      .status(200)
+      .json({ email: user.email, username: user.username, guest: user.guest });
   } catch (error) {
     console.error(`💥💥 Error at /user[GET] `, error);
     res.status(501).json({ msg: "Internal server error" });
@@ -52,11 +51,6 @@ export const changeUsername = async (req, res) => {
   try {
     // Get username from req, which is passed by "authenticateToken" middleware
     const username = req.user.name;
-    // Verify if such a user exists
-    // const user = await User.findOne({ username });
-    // if (!user) {
-    //   return res.status(404).json({ msg: "User not found" });
-    // }
 
     const { newUsername } = req.body;
     const { error } = changeUsernameSchema.validate({ username: newUsername });
@@ -65,13 +59,13 @@ export const changeUsername = async (req, res) => {
     // user.username = newUsername;
     // await user.save();
     const user = await User.findOneAndUpdate(
-      { username: username },
+      { username: username, guest: false },
       { username: newUsername },
       { new: true }
     );
 
     if (!user) {
-      return res.status(404).json({ msg: "User not found" });
+      return res.status(404).json({ msg: "User not found " });
     }
     const accessToken = jwt.sign(
       {

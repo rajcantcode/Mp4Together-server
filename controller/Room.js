@@ -51,7 +51,10 @@ export const createRoom = async (req, res) => {
       roomId: user.roomId,
       socketId: user.socketId,
     };
-    pipeline.hset(`user:${user.username}`, userToCache);
+    pipeline.hset(
+      `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`,
+      userToCache
+    );
 
     const roomToCache = {
       mainRoomId: newRoom.mainRoomId,
@@ -75,6 +78,7 @@ export const createRoom = async (req, res) => {
       members: [user.username],
       admins: [user.username],
       membersMicState: newRoom.membersMicState,
+      guest: user.guest,
     });
   } catch (error) {
     console.log("error at createRoom[POST], ", { error });
@@ -115,12 +119,17 @@ export const joinRoom = async (req, res) => {
     // Removing room property, since we are going to separately cache room anyways
     const { room: userRoom, ...userToCache } = user;
     const pipeline = redis.pipeline();
-    pipeline.hset(`user:${user.username}`, "roomId", room.mainRoomId);
+    pipeline.hset(
+      `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`,
+      "roomId",
+      room.mainRoomId
+    );
 
     // Check if the user is already present in room, if present return the response
     const isUserInMembers = room.members.includes(username);
     if (isUserInMembers) {
       // User is already a member in room
+      await pipeline.exec();
       res.status(200).json({
         roomId: room.mainRoomId,
         socketRoomId: room.socketRoomId,
@@ -130,6 +139,7 @@ export const joinRoom = async (req, res) => {
         email: user.email,
         videoUrl: room.videoUrl,
         membersMicState: room.membersMicState,
+        guest: user.guest,
       });
       return;
     }
@@ -162,6 +172,7 @@ export const joinRoom = async (req, res) => {
     res.status(200).json({
       username: user.username,
       email: user.email,
+      guest: user.guest,
       ...roomObjToSend,
     });
     return;
@@ -192,7 +203,11 @@ export const exitRoom = async (req, res) => {
     );
 
     // Cache user
-    await redis.hdel(`user:${user.username}`, "roomId", "socketID");
+    await redis.hdel(
+      `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`,
+      "roomId",
+      "socketID"
+    );
 
     res.status(200).json({ msg });
   } catch (error) {

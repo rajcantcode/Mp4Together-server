@@ -53,7 +53,11 @@ export const checkTokenAndSetUserSocketId = async (token, socketId) => {
         return false;
       }
 
-      await redis.hset(`user:${user.username}`, "socketId", socketId);
+      await redis.hset(
+        `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`,
+        "socketId",
+        socketId
+      );
       return user.username;
     }
     return false;
@@ -220,6 +224,7 @@ export const assignSocket = async (usernameToSocket, socketRoom, username) => {
   console.log("assignsocket was called");
   const user =
     (await redis.hgetall(`user:${username}`)) ||
+    (await redis.hgetall(`guest:${username}`)) ||
     (await User.findOne({ username }));
   const userSocketId = user.socketId;
   if (usernameToSocket[socketRoom]) {
@@ -230,7 +235,7 @@ export const assignSocket = async (usernameToSocket, socketRoom, username) => {
   }
 };
 
-export const checkUserSocketId = (
+export const checkUserSocketId = async (
   usernameToSocketId,
   socketRoomId,
   username,
@@ -240,7 +245,7 @@ export const checkUserSocketId = (
     usernameToSocketId[socketRoomId] = {};
   }
   if (!usernameToSocketId[socketRoomId][username]) {
-    assignSocket(usernameToSocketId, socketRoomId, username);
+    await assignSocket(usernameToSocketId, socketRoomId, username);
   }
   if (usernameToSocketId[socketRoomId][username] !== socketId) {
     return false;
