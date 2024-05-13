@@ -1,6 +1,7 @@
 import express from "express";
 import {
   createUser,
+  guestLogin,
   loginUser,
   logoutUser,
   resendOtp,
@@ -17,9 +18,10 @@ router
     returnUser
   )
   .post("/signup", createUser)
-  .put("/verify", verifyOtp)
+  .post("/verify", verifyOtp)
   .put("/resend", resendOtp)
   .post("/login", loginUser)
+  .post("/guest", guestLogin)
   .post("/logout", authenticateToken, logoutUser);
 
 export default router;
