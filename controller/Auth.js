@@ -8,8 +8,10 @@ import {
   createUserSchema,
   loginUserEmailSchema,
   loginUserUsernameSchema,
+  resendOtpSchema,
   verifyOtpSchema,
 } from "../lib/validators/UserSchema.js";
+import { nouns, adjectives } from "../lib/utils/constants.js";
 import Joi from "joi";
 import nodemailer from "nodemailer";
 
@@ -77,7 +79,7 @@ const sendOtpToEmail = async (email, otp) => {
 export const resendOtp = async (req, res) => {
   try {
     const { email } = req.body;
-    const { error } = verifyOtpSchema.validate({ email });
+    const { error } = resendOtpSchema.validate({ email });
     if (error) throw error;
     const user = await User.findOne({ email });
     if (!user || user.verified) {
@@ -102,7 +104,7 @@ export const resendOtp = async (req, res) => {
 export const verifyOtp = async (req, res) => {
   try {
     const { email, otp } = req.body;
-    const { error } = verifyOtpSchema.validate({ email });
+    const { error } = verifyOtpSchema.validate({ email, otp });
     if (error) throw error;
 
     const savedOtp = await redis.get(`otp:${email}`);
@@ -112,11 +114,14 @@ export const verifyOtp = async (req, res) => {
     if (savedOtp !== otp) {
       return res.status(401).json({ message: "Invalid OTP" });
     }
-    const user = await User.updateOne({ email }, { verified: true });
+    const user = await User.findOneAndUpdate(
+      { email },
+      { verified: true },
+      { new: true }
+    );
     await redis.del(`otp:${email}`);
 
     if (req.body.sendUserDetails) {
-      const user = await User.findOne({ email });
       const accessToken = jwt.sign(
         { name: user.username },
         process.env.ACCESS_TOKEN_SECRET,
@@ -199,12 +204,12 @@ export const loginUser = async (req, res) => {
     // Valid login credentials
 
     // Check if user is verified
-    // if (!user.verified) {
-    //   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    //   await redis.set(`otp:${user.email}`, otp, "EX", 300);
-    //   const messageId = await sendOtpToEmail(user.email, otp);
-    //   return res.status(401).json({ email: user.email });
-    // }
+    if (!user.verified) {
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      await redis.set(`otp:${user.email}`, otp, "EX", 300);
+      const messageId = await sendOtpToEmail(user.email, otp);
+      return res.status(401).json({ email: user.email });
+    }
     // Generate a token for the user
     const accessToken = jwt.sign(
       { name: user.username },
@@ -241,6 +246,61 @@ export const loginUser = async (req, res) => {
   }
 };
 
+export const guestLogin = async (req, res) => {
+  try {
+    const username = `${
+      adjectives[Math.floor(Math.random() * adjectives.length)]
+    }${nouns[Math.floor(Math.random() * nouns.length)]}`;
+    const email = `${username}@notamail.com`;
+
+    const newUser = new User({
+      email,
+      username,
+      guest: true,
+    });
+    await newUser.save();
+    const accessToken = jwt.sign(
+      { name: newUser.username, guest: true },
+      process.env.ACCESS_TOKEN_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    // Cache user in redis
+    const pipeline = redis.pipeline();
+    pipeline.hset(`guest:${newUser.username}`, {
+      email: newUser.email,
+      username: newUser.username,
+    });
+    pipeline.expire(`guest:${newUser.username}`, 3600);
+    await pipeline.exec();
+
+    res
+      .status(200)
+      .cookie("accessToken", accessToken, {
+        httpOnly: true,
+        // domain: "localhost",
+        // path: "/",
+        sameSite: "none",
+        secure: true,
+        maxAge: 3600000,
+      })
+      .json({ email: newUser.email, username: newUser.username });
+  } catch (error) {
+    console.error(`💥💥 Error at /guestLogin[post] `, error);
+    if (error.code === 11000) {
+      return guestLogin(req, res);
+    } else {
+      res.status(501).json({ message: "Internal server error" });
+    }
+  }
+};
+
+export const deleteOldDocuments = async () => {
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+  await User.deleteMany({ guest: true, createdAt: { $lt: oneHourAgo } });
+};
+
 export const logoutUser = async (req, res) => {
   try {
     // Get username from req, which is passed by "authenticateToken" middleware
@@ -252,12 +312,19 @@ export const logoutUser = async (req, res) => {
     } else {
       if (user.roomId && user.roomId !== "") {
         await removeUserFromRoom(user.roomId, user.username);
+      }
+      if (user.guest) {
+        await User.deleteOne({ username });
+      } else {
         user.roomId = "";
         user.room = null;
+        await user.save();
       }
 
       // Delete user from redis
-      await redis.del(`user:${username}`);
+      await redis.del(
+        `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`
+      );
       res.setHeader(
         "Set-Cookie",
         `accessToken=; Expires=${new Date(0).toUTCString()}; Path=/; HttpOnly`
