@@ -9,6 +9,7 @@ import { rateLimit } from "express-rate-limit";
 import { Room } from "./model/Room.js";
 import { Server } from "socket.io";
 import helmet from "helmet";
+import cron from "node-cron";
 
 // Import routers
 import authRouter from "./routes/Auth.js";
@@ -25,6 +26,7 @@ import {
 
 import redis from "./lib/databases/redis.js";
 import connectToMongoose from "./lib/databases/mongo.js";
+import { deleteOldDocuments } from "./controller/Auth.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -66,7 +68,7 @@ app.use("/room", authenticateToken, roomRouter);
 app.use("/user", authenticateToken, userRouter);
 
 connectToMongoose().catch((err) => console.error(err));
-
+cron.schedule("*/10 * * * *", deleteOldDocuments);
 export const usernameToSocketId = {};
 const tempUsernameToSocketId = {};
 export const roomToAdmin = {};
@@ -88,9 +90,10 @@ io.on("connection", async (socket) => {
     return;
   }
   tempUsernameToSocketId[isValidToken] = socket.id;
+  socket.emit("ready");
 
   // Join a room
-  socket.on("join", async ({ room, username }) => {
+  socket.on("join", async ({ room, username, guest }) => {
     if (socket.id !== tempUsernameToSocketId[username]) {
       socket.disconnect();
       return;
@@ -103,14 +106,20 @@ io.on("connection", async (socket) => {
       usernameToSocketId[room] = {};
       usernameToSocketId[room][username] = socket.id;
     }
-    await redis.hset(`user:${username}`, "socketId", socket.id);
+    await redis.hset(
+      `${guest ? `guest:${username}` : `user:${username}`}`,
+      "socketId",
+      socket.id
+    );
     socketUser = username;
     socketUserRoom = room;
   });
 
   // Listen for messages
-  socket.on("sent-message", ({ room, username, msgObj }) => {
-    if (!checkUserSocketId(usernameToSocketId, room, username, socket.id)) {
+  socket.on("sent-message", async ({ room, username, msgObj }) => {
+    if (
+      !(await checkUserSocketId(usernameToSocketId, room, username, socket.id))
+    ) {
       socket.disconnect();
       return;
     }
@@ -123,12 +132,12 @@ io.on("connection", async (socket) => {
     async ({ username, mainRoomId, room: socketRoomId }) => {
       try {
         if (
-          !checkUserSocketId(
+          !(await checkUserSocketId(
             usernameToSocketId,
             socketRoomId,
             username,
             socket.id
-          )
+          ))
         ) {
           socket.disconnect();
           return;
@@ -185,8 +194,13 @@ io.on("connection", async (socket) => {
     "send-timestamp",
     async ({ timestamp, socketRoom, username, admin, mainRoomId, execute }) => {
       if (
-        !checkUserSocketId(usernameToSocketId, socketRoom, admin, socket.id) ||
-        !checkIfAdmin(mainRoomId, admin)
+        !(await checkUserSocketId(
+          usernameToSocketId,
+          socketRoom,
+          admin,
+          socket.id
+        )) ||
+        !(await checkIfAdmin(mainRoomId, admin))
       ) {
         socket.disconnect();
         return;
@@ -205,8 +219,14 @@ io.on("connection", async (socket) => {
   socket.on(
     "join-room",
     async ({ room: socketRoom, username, mainRoomId, admin }) => {
+      console.log(`received join-room event from ${username} in ${socketRoom}`);
       if (
-        !checkUserSocketId(usernameToSocketId, socketRoom, username, socket.id)
+        !(await checkUserSocketId(
+          usernameToSocketId,
+          socketRoom,
+          username,
+          socket.id
+        ))
       ) {
         socket.disconnect();
         return;
@@ -261,13 +281,18 @@ io.on("connection", async (socket) => {
     async ({ admin, member, socketRoomId, mainRoomId }, callback) => {
       try {
         if (
-          !checkUserSocketId(usernameToSocketId, socketRoomId, admin, socket.id)
+          !(await checkUserSocketId(
+            usernameToSocketId,
+            socketRoomId,
+            admin,
+            socket.id
+          ))
         ) {
           socket.disconnect();
           return;
         }
         // Check if the admin is really the admin
-        if (!checkIfAdmin(mainRoomId, admin)) {
+        if (!(await checkIfAdmin(mainRoomId, admin))) {
           callback({ error: { message: "only admins can remove a member" } });
           return;
         }
@@ -294,13 +319,13 @@ io.on("connection", async (socket) => {
       username,
     }) => {
       if (
-        !checkUserSocketId(
+        !(await checkUserSocketId(
           usernameToSocketId,
           socketRoomId,
           username,
           socket.id
-        ) ||
-        !checkIfAdmin(mainRoomId, username)
+        )) ||
+        !(await checkIfAdmin(mainRoomId, username))
       ) {
         return;
       }
@@ -316,13 +341,13 @@ io.on("connection", async (socket) => {
     "pause-video",
     async ({ socketRoomId, username: admin, mainRoomId }) => {
       if (
-        !checkUserSocketId(
+        !(await checkUserSocketId(
           usernameToSocketId,
           socketRoomId,
           admin,
           socket.id
-        ) ||
-        !checkIfAdmin(mainRoomId, admin)
+        )) ||
+        !(await checkIfAdmin(mainRoomId, admin))
       ) {
         return;
       }
@@ -332,15 +357,15 @@ io.on("connection", async (socket) => {
   );
   socket.on(
     "play-video",
-    ({ socketRoomId, curTimestamp, mainRoomId, username }) => {
+    async ({ socketRoomId, curTimestamp, mainRoomId, username }) => {
       if (
-        !checkUserSocketId(
+        !(await checkUserSocketId(
           usernameToSocketId,
           socketRoomId,
           username,
           socket.id
-        ) ||
-        !checkIfAdmin(mainRoomId, username)
+        )) ||
+        !(await checkIfAdmin(mainRoomId, username))
       ) {
         return;
       }
@@ -352,13 +377,13 @@ io.on("connection", async (socket) => {
     "req-timestamp",
     async ({ socketRoom, admin, username, execute, mainRoomId }) => {
       if (
-        !checkUserSocketId(
+        !(await checkUserSocketId(
           usernameToSocketId,
           socketRoom,
           username,
           socket.id
-        ) ||
-        !checkIfAdmin(mainRoomId, admin)
+        )) ||
+        !(await checkIfAdmin(mainRoomId, admin))
       ) {
         return;
       }
@@ -374,15 +399,15 @@ io.on("connection", async (socket) => {
 
   socket.on(
     "send-playback-rate",
-    ({ speed, socketRoomId, mainRoomId, username }) => {
+    async ({ speed, socketRoomId, mainRoomId, username }) => {
       if (
-        !checkUserSocketId(
+        !(await checkUserSocketId(
           usernameToSocketId,
           socketRoomId,
           username,
           socket.id
-        ) ||
-        !checkIfAdmin(mainRoomId, username)
+        )) ||
+        !(await checkIfAdmin(mainRoomId, username))
       ) {
         return;
       }
@@ -396,18 +421,23 @@ io.on("connection", async (socket) => {
       try {
         if (
           admin &&
-          !checkUserSocketId(usernameToSocketId, socketRoomId, admin, socket.id)
+          !(await checkUserSocketId(
+            usernameToSocketId,
+            socketRoomId,
+            admin,
+            socket.id
+          ))
         ) {
           return;
         }
         if (
           !admin &&
-          !checkUserSocketId(
+          !(await checkUserSocketId(
             usernameToSocketId,
             socketRoomId,
             username,
             socket.id
-          )
+          ))
         ) {
           return;
         }
@@ -437,6 +467,20 @@ io.on("connection", async (socket) => {
     console.log("A user disconnected", { e });
     console.log(`${socketUser} disconnected`);
   });
+});
+
+app.get("/clients", async (req, res) => {
+  const connectedClientsCount = io.sockets.sockets.size;
+  console.log(io.sockets.sockets.keys());
+  console.log("Sent clients");
+  const socketRoom = req.query.room;
+  const members = await io.in(socketRoom).fetchSockets();
+  console.log("Printing members of room");
+  console.log(members);
+  members.forEach((member) => {
+    console.log(member.id);
+  });
+  res.json({ connectedClients: connectedClientsCount });
 });
 
 server.listen(process.env.PORT, () => {
