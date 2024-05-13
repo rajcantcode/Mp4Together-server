@@ -3,12 +3,16 @@ const userSchema = new mongoose.Schema(
   {
     email: {
       type: String,
-      required: true,
+      required: function () {
+        return !this.guest;
+      },
       unique: true,
     },
     password: {
       type: String,
-      required: true,
+      required: function () {
+        return !this.guest;
+      },
       select: false,
     },
     username: {
@@ -20,11 +24,17 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    guest: {
+      type: Boolean,
+      default: false,
+    },
     roomId: String,
     room: { type: mongoose.Schema.Types.ObjectId, ref: "room" },
     socketId: String,
   },
   { timestamps: true }
 );
+
+userSchema.index({ guest: 1 });
 
 export const User = mongoose.model("user", userSchema);
