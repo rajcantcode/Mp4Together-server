@@ -95,7 +95,7 @@ export const resendOtp = async (req, res) => {
     if (Joi.isError(error)) {
       return res.status(403).json({ message: error.details[0].message });
     } else {
-      console.error(`💥💥 Error at /verifyOtp[post] `, error);
+      console.error(`💥💥 Error at /resendOtp[post] `, error);
       res.status(501).json({ message: "Internal server error" });
     }
   }
@@ -303,36 +303,18 @@ export const deleteOldDocuments = async () => {
 
 export const logoutUser = async (req, res) => {
   try {
+    res.setHeader(
+      "Set-Cookie",
+      `accessToken=; Expires=${new Date(0).toUTCString()}; Path=/; HttpOnly`
+    );
+    res.status(200).json({ msg: "Logged out successfully" });
     // Get username from req, which is passed by "authenticateToken" middleware
     const username = req.user.name;
+    const guest = req.user.guest;
     // Verify if such a user exists
-    const user = await User.findOne({ username });
-    if (!user) {
-      res.status(404).json({ msg: "User not found" });
-    } else {
-      if (user.roomId && user.roomId !== "") {
-        await removeUserFromRoom(user.roomId, user.username);
-      }
-      if (user.guest) {
-        await User.deleteOne({ username });
-      } else {
-        user.roomId = "";
-        user.room = null;
-        await user.save();
-      }
-
-      // Delete user from redis
-      await redis.del(
-        `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`
-      );
-      res.setHeader(
-        "Set-Cookie",
-        `accessToken=; Expires=${new Date(0).toUTCString()}; Path=/; HttpOnly`
-      );
-      res.status(200).json({ msg: "Logged out successfully" });
-    }
+    const user = await User.findOneAndDelete({ username, guest: true });
+    await redis.del(`${guest ? `guest:${username}` : `user:${username}`}`);
   } catch (error) {
     console.error("Error at /logout[POST]", error);
-    res.status(501).json({ msg: "Internal server error" });
   }
 };
