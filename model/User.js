@@ -28,9 +28,15 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    roomId: String,
-    room: { type: mongoose.Schema.Types.ObjectId, ref: "room" },
-    socketId: String,
+    roomIds: [String],
+    rooms: [{ type: mongoose.Schema.Types.ObjectId, ref: "room" }],
+    socketIds: [
+      {
+        _id: false,
+        room: String,
+        socketId: String,
+      },
+    ],
   },
   { timestamps: true }
 );
