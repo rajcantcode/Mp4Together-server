@@ -10,18 +10,6 @@ export const createRoom = async (req, res) => {
   try {
     // Get username from req, which is passed by middleware
     const username = req.user.name;
-    // Verify if such a user exists
-    const user = await User.findOne({ username });
-
-    if (!user) return res.status(404).json({ msg: "No such user exists" });
-
-    // Check if the user already has a roomId, if so, remove the user from that room
-    if (user.roomId !== "") {
-      const room = await Room.findOne({ mainRoomId: user.roomId });
-      if (room) {
-        await removeUserFromRoom(room.mainRoomId, user.username);
-      }
-    }
 
     // Generate roomId and save in the DB
     let roomId = await generateRandomRoomID();
@@ -29,18 +17,19 @@ export const createRoom = async (req, res) => {
     const newRoom = new Room({
       mainRoomId: roomId,
       socketRoomId,
-      members: [user.username],
-      admins: [user.username],
-      membersMicState: { [user.username]: false },
+      members: [username],
+      admins: [username],
+      membersMicState: { [username]: false },
     });
     await newRoom.save();
-    roomToAdmin[roomId] = [user.username];
+    roomToAdmin[roomId] = [username];
 
     // Also save the roomId and room in User collection in DB
-
-    user.roomId = roomId;
-    user.room = newRoom._id;
-    await user.save();
+    const user = await User.findOneAndUpdate(
+      { username },
+      { $push: { roomIds: newRoom.mainRoomId, rooms: newRoom._id } },
+      { new: true }
+    );
 
     // Cache room and user
     // Removing room property, since we are going to separately cache room anyways
@@ -48,8 +37,8 @@ export const createRoom = async (req, res) => {
     const userToCache = {
       email: user.email,
       username: user.username,
-      roomId: user.roomId,
-      socketId: user.socketId,
+      roomIds: JSON.stringify(user.roomIds),
+      socketIds: JSON.stringify(user.socketIds),
     };
     pipeline.hset(
       `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`,
@@ -73,15 +62,15 @@ export const createRoom = async (req, res) => {
     await pipeline.exec();
 
     res.status(200).json({
-      roomId: user.roomId,
-      socketRoomId: socketRoomId,
+      roomId: newRoom.mainRoomId,
+      socketRoomId: newRoom.socketRoomId,
       members: [user.username],
       admins: [user.username],
       membersMicState: newRoom.membersMicState,
       guest: user.guest,
     });
   } catch (error) {
-    console.log("error at createRoom[POST], ", { error });
+    console.error(error);
     res.status(501).json({ msg: "internal server error" });
   }
 };
@@ -89,31 +78,29 @@ export const createRoom = async (req, res) => {
 export const joinRoom = async (req, res) => {
   try {
     const mainRoomId = req.params.id;
-    // Use Mongoose to find a room by roomId
-    const room = await Room.findOne({ mainRoomId });
+    const username = req.user.name;
+
+    // Find the room with the given roomId and add the user to the members array
+    const room = await Room.findOneAndUpdate(
+      { mainRoomId, members: { $ne: username } },
+      {
+        $push: { members: username },
+        $set: { [`membersMicState.${username}`]: false },
+      },
+      { new: true }
+    );
     if (!room) {
       // If no room is found, return an error response
       console.log("Room not found");
       return res.status(404).json({ msg: "No such room exists" });
     }
 
-    // If room is found
-    // Find the user
-    const username = req.user.name;
-    const user = await User.findOne({ username });
-
-    // Check if the user already has a roomId, if so, remove the user from that room
-    if (user.roomId !== "" && user.roomId !== room.mainRoomId) {
-      const room = await Room.findOne({ mainRoomId: user.roomId });
-      if (room) {
-        await removeUserFromRoom(room.mainRoomId, user.username);
-      }
-    }
-
     // Assign the found room's roomId to user and save it in DB
-    user.roomId = room.mainRoomId;
-    user.room = room._id;
-    await user.save();
+    const user = await User.findOneAndUpdate(
+      { username },
+      { $push: { roomIds: room.mainRoomId, rooms: room._id } },
+      { new: true }
+    );
 
     // Cache user
     // Removing room property, since we are going to separately cache room anyways
@@ -121,48 +108,23 @@ export const joinRoom = async (req, res) => {
     const pipeline = redis.pipeline();
     pipeline.hset(
       `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`,
-      "roomId",
-      room.mainRoomId
+      "roomIds",
+      JSON.stringify(user.roomIds)
     );
 
-    // Check if the user is already present in room, if present return the response
-    const isUserInMembers = room.members.includes(username);
-    if (isUserInMembers) {
-      // User is already a member in room
-      await pipeline.exec();
-      res.status(200).json({
-        roomId: room.mainRoomId,
-        socketRoomId: room.socketRoomId,
-        members: room.members,
-        admins: room.admins,
-        username: user.username,
-        email: user.email,
-        videoUrl: room.videoUrl,
-        membersMicState: room.membersMicState,
-        guest: user.guest,
-      });
-      return;
-    }
-
-    // Update the members array of the room collection
-    room.members.push(username);
-    room.membersMicState[username] = false;
-    room.markModified("membersMicState");
-    const updatedRoom = await room.save();
-
     const roomObjToSend = {
-      roomId: updatedRoom.mainRoomId,
-      socketRoomId: updatedRoom.socketRoomId,
-      members: updatedRoom.members,
-      admins: updatedRoom.admins,
-      videoUrl: updatedRoom.videoUrl,
-      membersMicState: updatedRoom.membersMicState,
+      roomId: room.mainRoomId,
+      socketRoomId: room.socketRoomId,
+      members: room.members,
+      admins: room.admins,
+      videoUrl: room.videoUrl,
+      membersMicState: room.membersMicState,
     };
     // Cache room
-    pipeline.hset(`room:${updatedRoom.mainRoomId}`, {
-      mainRoomId: updatedRoom.mainRoomId,
-      socketRoomId: updatedRoom.socketRoomId,
-      videoUrl: updatedRoom.videoUrl,
+    pipeline.hset(`room:${room.mainRoomId}`, {
+      mainRoomId: room.mainRoomId,
+      socketRoomId: room.socketRoomId,
+      videoUrl: room.videoUrl,
       members: JSON.stringify(roomObjToSend.members),
       admins: JSON.stringify(roomObjToSend.admins),
       membersMicState: JSON.stringify(roomObjToSend.membersMicState),
@@ -189,15 +151,19 @@ export const exitRoom = async (req, res) => {
     const mainRoomId = req.params.id;
     const memberToRemove = req.user.name;
     // If the operation is successful, the response msg to be sent to the user will be returned by "removeUserFromRoom" function
-    const msg = await removeUserFromRoom(mainRoomId, memberToRemove);
+    const { msg, roomObjId } = await removeUserFromRoom(
+      mainRoomId,
+      memberToRemove
+    );
 
-    // Set the roomId property of the user to ""
     const user = await User.findOneAndUpdate(
       { username: memberToRemove },
       {
-        roomId: "",
-        room: null,
-        socketId: "",
+        $pull: {
+          roomIds: mainRoomId,
+          rooms: roomObjId,
+          socketIds: { room: mainRoomId },
+        },
       },
       { new: true }
     );
@@ -205,13 +171,13 @@ export const exitRoom = async (req, res) => {
     // Cache user
     await redis.hdel(
       `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`,
-      "roomId",
-      "socketID"
+      "roomIds",
+      "socketIds"
     );
 
     res.status(200).json({ msg });
   } catch (error) {
-    console.log("Error at exitRoom[POST] ", error);
+    console.error(error);
     if (error === "No such member exists in the room") {
       res.status(404).json({ msg: "No such member exists in the room" });
     } else {
@@ -266,14 +232,13 @@ export const saveUrl = async (req, res) => {
     }
   } catch (error) {
     if (error instanceof AxiosError) {
+      console.error(error);
       if (error.code === "ERR_BAD_REQUEST") {
         return res.status(404).json({ msg: "No such youtube video exists" });
       } else {
-        console.log("Error at saveUrl[POST] ", error);
         return res.status(501).json({ msg: "internal server error" });
       }
     }
-    console.log("Error at saveUrl[POST] ", error);
     return res.status(501).json({ msg: "internal server error" });
   }
 };
