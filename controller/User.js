@@ -7,10 +7,8 @@ import { changeUsernameSchema } from "../lib/validators/UserSchema.js";
 export const returnUser = async (req, res) => {
   try {
     // Get username from req, which is passed by "authenticateToken" middleware
-    console.log("In returnUser");
     const username = req.user.name;
     const guest = req.user.guest;
-    console.log("finding ", username);
     // Verify if such a user exists
     // Check in redis cache
     let user = await redis.hgetall(`${guest ? "guest" : "user"}:${username}`);
@@ -82,7 +80,6 @@ export const changeUsername = async (req, res) => {
     pipeline.hset(`user:${newUsername}`, {
       email: user.email,
       username: user.username,
-      socketId: user.socketId,
     });
     pipeline.expire(`user:${newUsername}`, 3600 * 24 * 7);
     await pipeline.exec();

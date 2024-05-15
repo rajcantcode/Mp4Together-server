@@ -15,7 +15,6 @@ export const authenticateToken = async (req, res, next, setCsp = false) => {
     );
   }
   if (!token) {
-    console.log("Token not received");
     return res.status(401).json({ msg: "No token provided" });
   }
   const secret = process.env.ACCESS_TOKEN_SECRET;
@@ -31,12 +30,15 @@ export const authenticateToken = async (req, res, next, setCsp = false) => {
     req.user = user;
     next();
   } catch (error) {
-    console.log("Invalid token");
     return res.status(403).json({ msg: "Invalid token" });
   }
 };
 
-export const checkTokenAndSetUserSocketId = async (token, socketId) => {
+export const checkTokenAndSetUserSocketId = async (
+  token,
+  socketId,
+  mainRoomId
+) => {
   const secret = process.env.ACCESS_TOKEN_SECRET;
   if (!secret) {
     throw new Error("ACCESS_TOKEN_SECRET is not set");
@@ -46,7 +48,15 @@ export const checkTokenAndSetUserSocketId = async (token, socketId) => {
     if (typeof payload === "object" && "name" in payload) {
       const user = await User.findOneAndUpdate(
         { username: payload.name },
-        { socketId: socketId }
+        {
+          $push: {
+            socketIds: {
+              room: mainRoomId,
+              socketId: socketId,
+            },
+          },
+        },
+        { new: true }
       );
 
       if (!user) {
@@ -55,8 +65,8 @@ export const checkTokenAndSetUserSocketId = async (token, socketId) => {
 
       await redis.hset(
         `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`,
-        "socketId",
-        socketId
+        "socketIds",
+        JSON.stringify(user.socketIds)
       );
       return user.username;
     }
@@ -164,6 +174,7 @@ export const removeUserFromRoom = async (mainRoomId, memberToRemove) => {
       delete roomToAdmin[mainRoomId];
       return {
         msg: "user removed from room successfully and room deleted due to no members",
+        roomObjId: updatedRoom._id,
       };
     }
 
@@ -183,6 +194,7 @@ export const removeUserFromRoom = async (mainRoomId, memberToRemove) => {
       );
       return {
         msg: `user removed from room successfully, new admin = ${updatedRoom.admins[0]}`,
+        roomObjId: updatedRoom._id,
       };
     }
 
@@ -197,9 +209,11 @@ export const removeUserFromRoom = async (mainRoomId, memberToRemove) => {
       JSON.stringify(updatedRoom.membersMicState)
     );
 
-    return { msg: "user removed from room successfully" };
+    return {
+      msg: "user removed from room successfully",
+      roomObjId: updatedRoom._id,
+    };
   } catch (error) {
-    console.log(error);
     throw error;
   }
 };
@@ -220,13 +234,20 @@ export const deleteRoomIfNoMembers = async (mainRoomId) => {
   }
 };
 
-export const assignSocket = async (usernameToSocket, socketRoom, username) => {
-  console.log("assignsocket was called");
+export const assignSocket = async (
+  usernameToSocket,
+  socketRoom,
+  username,
+  mainRoomId
+) => {
   const user =
     (await redis.hgetall(`user:${username}`)) ||
     (await redis.hgetall(`guest:${username}`)) ||
     (await User.findOne({ username }));
-  const userSocketId = user.socketId;
+  const userSocketIds = user._id ? user.socketIds : JSON.parse(user.socketIds);
+  const userSocketId = userSocketIds.find(
+    (obj) => obj.room === mainRoomId
+  ).socketId;
   if (usernameToSocket[socketRoom]) {
     usernameToSocket[socketRoom][username] = userSocketId;
   } else {
