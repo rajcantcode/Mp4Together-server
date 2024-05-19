@@ -6,6 +6,7 @@ import { nanoid } from "nanoid";
 import axios, { AxiosError } from "axios";
 import redis from "../lib/databases/redis.js";
 import { roomToAdmin, usernameToSocketId } from "../index.js";
+import { youtube } from "@googleapis/youtube";
 export const createRoom = async (req, res) => {
   try {
     // Get username from req, which is passed by middleware
@@ -91,7 +92,6 @@ export const joinRoom = async (req, res) => {
     );
     if (!room) {
       // If no room is found, return an error response
-      console.log("Room not found");
       return res.status(404).json({ msg: "No such room exists" });
     }
 
@@ -242,4 +242,46 @@ export const saveUrl = async (req, res) => {
     return res.status(501).json({ msg: "internal server error" });
   }
 };
-// Resolve exit room error
+
+const Youtube = process.env.YOUTUBE_API_KEY
+  ? youtube({ version: "v3", auth: process.env.YOUTUBE_API_KEY })
+  : null;
+export const getVideoDetails = async (req, res) => {
+  try {
+    const query = req.query.q;
+    if (typeof query !== "string") {
+      return res.status(400).json({ msg: "Invalid query" });
+    }
+    if (!Youtube) {
+      throw new Error("Youtube API key not set");
+    }
+    const cachedData = await redis.get(`yt:${query}`);
+    if (cachedData) {
+      res.set("Cache-Control", "public, max-age=3600");
+      return res.status(200).json({ data: JSON.parse(cachedData) });
+    }
+    const response = await Youtube.search.list({
+      part: ["snippet"],
+      type: ["video"],
+      fields:
+        "items(id/videoId,snippet/title,snippet/thumbnails/default,snippet/channelTitle)",
+      maxResults: 10,
+      q: query,
+    });
+    const items = response.data.items;
+    const videoDetails = items.map((item) => {
+      return {
+        channel: item.snippet?.channelTitle ?? "",
+        name: item.snippet?.title ?? "",
+        videoId: item?.id?.videoId ?? "",
+        thumbnail: item.snippet?.thumbnails?.default?.url ?? "",
+      };
+    });
+    res.set("Cache-Control", "public, max-age=3600");
+    res.status(200).json({ data: videoDetails });
+    await redis.setex(`yt:${query}`, 3600, JSON.stringify(videoDetails));
+  } catch (error) {
+    console.error(error);
+    return res.status(501).json({ msg: "Internal server error" });
+  }
+};
