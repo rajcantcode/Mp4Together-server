@@ -2,7 +2,8 @@
 import { generateRandomRoomID, removeUserFromRoom } from "../helpers.js";
 import { User } from "../model/User.js";
 import { Room } from "../model/Room.js";
-import { nanoid } from "nanoid";
+import { customAlphabet } from "nanoid";
+
 import axios, { AxiosError } from "axios";
 import redis from "../lib/databases/redis.js";
 import { roomToAdmin, usernameToSocketId } from "../index.js";
@@ -14,7 +15,10 @@ export const createRoom = async (req, res) => {
 
     // Generate roomId and save in the DB
     let roomId = await generateRandomRoomID();
-    const socketRoomId = nanoid(8);
+    const alphabet =
+      "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    const nanoid = customAlphabet(alphabet, 8);
+    const socketRoomId = nanoid();
     const newRoom = new Room({
       mainRoomId: roomId,
       socketRoomId,
@@ -265,7 +269,7 @@ export const getVideoDetails = async (req, res) => {
       type: ["video"],
       fields:
         "items(id/videoId,snippet/title,snippet/thumbnails/default,snippet/channelTitle)",
-      maxResults: 10,
+      maxResults: 15,
       q: query,
     });
     const items = response.data.items;
