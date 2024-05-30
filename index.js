@@ -98,7 +98,6 @@ io.on("connection", async (socket) => {
   tempUsernameToSocketId[isValidToken] = socket.id;
   socketUserMainRoom = mainRoomId;
   socketUserId = socket.id;
-  socket.emit("ready");
 
   // Join a room
   socket.on("join", async ({ room, username, guest }) => {
@@ -188,7 +187,15 @@ io.on("connection", async (socket) => {
 
   socket.on(
     "send-timestamp",
-    async ({ timestamp, socketRoom, username, admin, mainRoomId, execute }) => {
+    async ({
+      timestamp,
+      socketRoom,
+      username,
+      admin,
+      mainRoomId,
+      execute,
+      t,
+    }) => {
       if (
         socketRoom !== socketUserRoom ||
         mainRoomId !== socketUserMainRoom ||
@@ -213,6 +220,7 @@ io.on("connection", async (socket) => {
       io.to(usernameToSocketId[socketRoom][username]).emit("timestamp", {
         timestamp,
         execute,
+        t,
       });
       if (execute) {
         if (
@@ -230,71 +238,75 @@ io.on("connection", async (socket) => {
   socket.on(
     "join-room",
     async ({ room: socketRoom, username, mainRoomId, admin }) => {
-      if (
-        socketRoom !== socketUserRoom ||
-        mainRoomId !== socketUserMainRoom ||
-        username !== socketUser ||
-        socket.id !== socketUserId
-      ) {
-        socket.disconnect();
-        return;
-      }
-      const msgObj = {
-        type: "notification",
-        message: `${username} joined the room`,
-      };
+      try {
+        if (
+          socketRoom !== socketUserRoom ||
+          mainRoomId !== socketUserMainRoom ||
+          username !== socketUser ||
+          socket.id !== socketUserId
+        ) {
+          socket.disconnect();
+          return;
+        }
+        const msgObj = {
+          type: "notification",
+          message: `${username} joined the room`,
+        };
 
-      let room = await redis.hgetall(`room:${mainRoomId}`);
-      if (Object.keys(room).length === 0) {
-        room = await Room.findOne({ mainRoomId });
-      }
-      if (
-        !usernameToSocketId[socketRoom] ||
-        !usernameToSocketId[socketRoom][admin]
-      ) {
-        await assignSocket(usernameToSocketId, socketRoom, admin, mainRoomId);
-      }
-      if (
-        !usernameToSocketId[socketRoom] ||
-        !usernameToSocketId[socketRoom][username]
-      ) {
-        await assignSocket(
-          usernameToSocketId,
-          socketRoom,
-          username,
-          mainRoomId
-        );
-      }
+        let room = await redis.hgetall(`room:${mainRoomId}`);
+        if (Object.keys(room).length === 0) {
+          room = await Room.findOne({ mainRoomId });
+        }
+        if (
+          !usernameToSocketId[socketRoom] ||
+          !usernameToSocketId[socketRoom][admin]
+        ) {
+          await assignSocket(usernameToSocketId, socketRoom, admin, mainRoomId);
+        }
+        if (
+          !usernameToSocketId[socketRoom] ||
+          !usernameToSocketId[socketRoom][username]
+        ) {
+          await assignSocket(
+            usernameToSocketId,
+            socketRoom,
+            username,
+            mainRoomId
+          );
+        }
 
-      // Send a socket event to admin to get the current timestamp of video, if video exists
-      if (room.videoUrl) {
-        io.to(usernameToSocketId[socketRoom][admin]).emit("get-timestamp", {
-          requester: username,
-        });
-      } else {
-        io.to(usernameToSocketId[socketRoom][username]).emit("timestamp", {
-          timestamp: 0,
-        });
-      }
+        // Send a socket event to admin to get the current timestamp of video, if video exists
+        if (room.videoUrl) {
+          io.to(usernameToSocketId[socketRoom][admin]).emit("get-timestamp", {
+            requester: username,
+          });
+        } else {
+          io.to(usernameToSocketId[socketRoom][username]).emit("timestamp", {
+            timestamp: 0,
+          });
+        }
 
-      // Checking if the room is obtained from database or cache
-      const response = room._id
-        ? {
-            msgObj,
-            members: room.members,
-            admins: room.admins,
-            membersMicState: room.membersMicState,
-            joiner: username,
-          }
-        : {
-            msgObj,
-            members: JSON.parse(room.members),
-            admins: JSON.parse(room.admins),
-            membersMicState: JSON.parse(room.membersMicState),
-            joiner: username,
-          };
-      // Send the message to other users, that a user joined the room
-      socket.to(socketRoom).emit("join-msg", response);
+        // Checking if the room is obtained from database or cache
+        const response = room._id
+          ? {
+              msgObj,
+              members: room.members,
+              admins: room.admins,
+              membersMicState: room.membersMicState,
+              joiner: username,
+            }
+          : {
+              msgObj,
+              members: JSON.parse(room.members),
+              admins: JSON.parse(room.admins),
+              membersMicState: JSON.parse(room.membersMicState),
+              joiner: username,
+            };
+        // Send the message to other users, that a user joined the room
+        socket.to(socketRoom).emit("join-msg", response);
+      } catch (error) {
+        console.error(error);
+      }
     }
   );
 
@@ -345,6 +357,7 @@ io.on("connection", async (socket) => {
       startTime,
       mainRoomId,
       username,
+      t,
     }) => {
       if (
         socketRoomId !== socketUserRoom ||
@@ -360,6 +373,7 @@ io.on("connection", async (socket) => {
         videoUrl: videoUrl,
         videoId: videoId,
         startTime: startTime,
+        t,
       });
     }
   );
@@ -383,7 +397,7 @@ io.on("connection", async (socket) => {
   );
   socket.on(
     "play-video",
-    async ({ socketRoomId, curTimestamp, mainRoomId, username }) => {
+    async ({ socketRoomId, curTimestamp, mainRoomId, username, t }) => {
       if (
         socketRoomId !== socketUserRoom ||
         mainRoomId !== socketUserMainRoom ||
@@ -393,7 +407,7 @@ io.on("connection", async (socket) => {
       ) {
         return;
       }
-      socket.to(socketRoomId).emit("server-play-video", { curTimestamp });
+      socket.to(socketRoomId).emit("server-play-video", { curTimestamp, t });
     }
   );
 
@@ -481,13 +495,78 @@ io.on("connection", async (socket) => {
       }
     }
   );
+
+  // Sent by the admin to let other participants in the room to connect to the peer server
+  socket.on("create-peer-conn", async (data) => {
+    if (!checkIfAdmin(socketUserMainRoom, socketUser)) return;
+    if (data && data.joiner) {
+      const joiner = data.joiner;
+      if (
+        !usernameToSocketId[socketUserRoom] ||
+        !usernameToSocketId[socketUserRoom][joiner]
+      ) {
+        await assignSocket(
+          usernameToSocketId,
+          socketUserRoom,
+          joiner,
+          socketUserMainRoom
+        );
+      }
+      io.to(usernameToSocketId[socketUserRoom][joiner]).emit(
+        "conn-peer-server"
+      );
+    } else {
+      socket.to(socketUserRoom).emit("conn-peer-server");
+    }
+  });
+  // Sent by the participants, when they successfully connect to the peer server
+  socket.on("conn-succ", () => {
+    // This event informs admin to call the user whose connected successfully to the peerjs server
+    // This works because currently only one admin is allowed in a room
+    const admin = roomToAdmin[socketUserMainRoom][0];
+    io.to(usernameToSocketId[socketUserRoom][admin]).emit("create-call", {
+      callee: socketUser,
+    });
+  });
+  // Sent by admin when video streaming is stopped, so other people can close their connections
+  socket.on("dest-peer", async (data, cb) => {
+    if (!checkIfAdmin(socketUserMainRoom, socketUser)) return;
+    if (data && data.peer) {
+      if (
+        !usernameToSocketId[socketUserRoom] ||
+        !usernameToSocketId[socketUserRoom][data.peer]
+      ) {
+        await assignSocket(
+          usernameToSocketId,
+          socketUserRoom,
+          data.peer,
+          socketUserMainRoom
+        );
+      }
+      io.timeout(4000)
+        .to(usernameToSocketId[socketUserRoom][data.peer])
+        .emit("dest-peer-conn", {}, (data) => {
+          // if (data.status === "success") {
+          //   cb({ status: data.status });
+          // }
+          cb({ status: "success" });
+        });
+      return;
+    }
+    socket.to(socketUserRoom).emit("dest-peer-conn");
+  });
   socket.on("error", (error) => {
     console.error("Socket error:", error);
   });
   socket.on("disconnect", async (reason) => {
     try {
+      // "transport close" is the reason when the user closes the tab
       if (reason === "transport close") {
         // Perform exit room for that socket user
+        // Check if the user was admin
+        if (roomToAdmin[socketUserMainRoom][0] === socketUser) {
+          socket.to(socketUserRoom).emit("dest-peer-conn");
+        }
         const { msg, roomObjId } = await removeUserFromRoom(
           socketUserMainRoom,
           socketUser
@@ -546,6 +625,8 @@ io.on("connection", async (socket) => {
       console.error(error);
     }
   });
+
+  socket.emit("ready");
 });
 
 server.listen(process.env.PORT, () => {
