@@ -57,8 +57,8 @@ const sendOtpToEmail = async (email, otp) => {
       host: "sandbox.smtp.mailtrap.io",
       port: 2525,
       auth: {
-        user: "67ca2880f4c82e",
-        pass: "70ce85e21123bf",
+        user: process.env.temp_user_mail,
+        pass: process.env.temp_user_pass,
       },
     });
 
