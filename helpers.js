@@ -240,10 +240,13 @@ export const assignSocket = async (
   username,
   mainRoomId
 ) => {
-  const user =
-    (await redis.hgetall(`user:${username}`)) ||
-    (await redis.hgetall(`guest:${username}`)) ||
-    (await User.findOne({ username }));
+  let user = await getWithTimeout(`user:${username}`);
+  if (Object.keys(user).length === 0) {
+    user = await getWithTimeout(`guest:${username}`);
+  }
+  if (Object.keys(user).length === 0) {
+    user = await User.findOne({ username });
+  }
   const userSocketIds = user._id ? user.socketIds : JSON.parse(user.socketIds);
   const userSocketId = userSocketIds.find(
     (obj) => obj.room === mainRoomId
@@ -286,9 +289,17 @@ export const validateCredentials = (email, password, username) => {
   return true;
 };
 
+export const getWithTimeout = async (key, timeout = 4000) => {
+  const delay = new Promise((resolve, reject) =>
+    setTimeout(() => resolve({}), timeout)
+  );
+  const get = redis.hgetall(key);
+  return Promise.race([get, delay]);
+};
+
 export const checkIfAdmin = async (mainRoomId, username) => {
   if (!roomToAdmin[mainRoomId]) {
-    const redisRoom = await redis.hgetall(`room:${mainRoomId}`);
+    const redisRoom = await getWithTimeout(`room:${mainRoomId}`);
     if (Object.keys(redisRoom).length === 0) {
       const room = await Room.findOne({ mainRoomId });
       if (!room) return false;

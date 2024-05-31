@@ -3,6 +3,7 @@ import redis from "../lib/databases/redis.js";
 import Joi from "joi";
 import jwt from "jsonwebtoken";
 import { changeUsernameSchema } from "../lib/validators/UserSchema.js";
+import { getWithTimeout } from "../helpers.js";
 
 export const returnUser = async (req, res) => {
   try {
@@ -11,7 +12,7 @@ export const returnUser = async (req, res) => {
     const guest = req.user.guest;
     // Verify if such a user exists
     // Check in redis cache
-    let user = await redis.hgetall(`${guest ? "guest" : "user"}:${username}`);
+    let user = await getWithTimeout(`${guest ? "guest" : "user"}:${username}`);
     // If not in cache, check in database
     if (Object.keys(user).length === 0) {
       user = await User.findOne({ username });

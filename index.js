@@ -23,6 +23,7 @@ import {
   checkUserSocketId,
   checkIfAdmin,
   removeUserFromRoom,
+  getWithTimeout,
 } from "./helpers.js";
 
 import redis from "./lib/databases/redis.js";
@@ -149,7 +150,7 @@ io.on("connection", async (socket) => {
           message: `${username} left the room`,
         };
 
-        let room = await redis.hgetall(`room:${mainRoomId}`);
+        let room = await getWithTimeout(`room:${mainRoomId}`);
         // hgetAll returns an empty object if the hash does not exist
         if (Object.keys(room).length === 0) {
           room = await Room.findOne({ mainRoomId: mainRoomId });
@@ -253,7 +254,7 @@ io.on("connection", async (socket) => {
           message: `${username} joined the room`,
         };
 
-        let room = await redis.hgetall(`room:${mainRoomId}`);
+        let room = await getWithTimeout(`room:${mainRoomId}`);
         if (Object.keys(room).length === 0) {
           room = await Room.findOne({ mainRoomId });
         }
@@ -594,7 +595,8 @@ io.on("connection", async (socket) => {
         type: "notification",
         message: `${socketUser} left the room`,
       };
-      let room = await redis.hgetall(`room:${socketUserMainRoom}`);
+
+      let room = await getWithTimeout(`room:${socketUserMainRoom}`);
       if (Object.keys(room).length === 0) {
         room = await Room.findOne({ mainRoomId: socketUserMainRoom });
       }
