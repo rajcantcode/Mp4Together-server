@@ -450,6 +450,7 @@ io.on("connection", async (socket) => {
         return;
       }
       socket.to(socketRoomId).emit("receive-playback-rate", { speed });
+      await Room.updateOne({ mainRoomId }, { $set: { playbackSpeed: speed } });
     }
   );
 

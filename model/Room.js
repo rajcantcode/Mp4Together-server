@@ -14,6 +14,10 @@ const roomSchema = new mongoose.Schema(
     videoUrl: {
       type: String,
     },
+    playbackSpeed: {
+      type: Number,
+      default: 1,
+    },
     members: [String],
     admins: [String],
     membersMicState: {

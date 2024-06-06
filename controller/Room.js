@@ -8,6 +8,7 @@ import axios, { AxiosError } from "axios";
 import redis from "../lib/databases/redis.js";
 import { roomToAdmin, usernameToSocketId } from "../index.js";
 import { youtube } from "@googleapis/youtube";
+
 export const createRoom = async (req, res) => {
   try {
     // Get username from req, which is passed by middleware
@@ -122,6 +123,7 @@ export const joinRoom = async (req, res) => {
       members: room.members,
       admins: room.admins,
       videoUrl: room.videoUrl,
+      playbackSpeed: room.playbackSpeed,
       membersMicState: room.membersMicState,
     };
     // Cache room
