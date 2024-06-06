@@ -15,6 +15,8 @@ import { nouns, adjectives } from "../lib/utils/constants.js";
 import Joi from "joi";
 import nodemailer from "nodemailer";
 
+const environment = process.env.NODE_ENV || "development";
+
 export const createUser = async (req, res) => {
   try {
     const { email, password, username } = req.body;
@@ -27,8 +29,13 @@ export const createUser = async (req, res) => {
       email,
       password: hashedPass,
       username,
+      verified: environment === "development" ? true : false,
     });
     await newUser.save();
+
+    if (environment === "development") {
+      return res.status(201).json({ email: newUser.email, verified: true });
+    }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     await redis.set(`otp:${newUser.email}`, otp, "EX", 300);
