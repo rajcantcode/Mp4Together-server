@@ -556,9 +556,15 @@ io.on("connection", async (socket) => {
     }
     socket.to(socketUserRoom).emit("dest-peer-conn");
   });
+
+  socket.on("set-kick-status", () => {
+    socket.kickStatus = true;
+  });
+
   socket.on("error", (error) => {
     console.error("Socket error:", error);
   });
+
   socket.on("disconnect", async (reason) => {
     try {
       // "transport close" is the reason when the user closes the tab
@@ -591,10 +597,15 @@ io.on("connection", async (socket) => {
           "socketIds"
         );
       }
-      const msgObj = {
-        type: "notification",
-        message: `${socketUser} left the room`,
-      };
+      const msgObj = socket.kickStatus
+        ? {
+            type: "notification",
+            message: `${socketUser} was kicked by ${roomToAdmin[socketUserMainRoom][0]}`,
+          }
+        : {
+            type: "notification",
+            message: `${socketUser} left the room`,
+          };
 
       let room = await getWithTimeout(`room:${socketUserMainRoom}`);
       if (Object.keys(room).length === 0) {
