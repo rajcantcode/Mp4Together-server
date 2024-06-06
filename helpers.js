@@ -3,6 +3,11 @@ import { User } from "./model/User.js";
 import jwt from "jsonwebtoken";
 import axios from "axios";
 import redis from "./lib/databases/redis.js";
+import {
+  dictionary1,
+  dictionary2,
+  dictionary3,
+} from "./lib/utils/constants.js";
 import { roomToAdmin, usernameToSocketId } from "./index.js";
 
 // To authenticate jwt token
@@ -80,44 +85,6 @@ export const checkTokenAndSetUserSocketId = async (
 // This function is used to generate room id
 export const generateRandomRoomID = async () => {
   try {
-    const dictionary1 = [
-      "cat",
-      "dog",
-      "sun",
-      "moon",
-      "book",
-      "rain",
-      "tree",
-      "bird",
-      "fish",
-      "star",
-    ];
-
-    const dictionary2 = [
-      "frog",
-      "rose",
-      "fire",
-      "lake",
-      "wind",
-      "leaf",
-      "snow",
-      "song",
-      "pear",
-      "lamp",
-    ];
-    const dictionary3 = [
-      "gold",
-      "note",
-      "pink",
-      "blue",
-      "cloud",
-      "ship",
-      "mint",
-      "rosebud",
-      "rock",
-      "jump",
-    ];
-
     const randomIndex1 = Math.floor(Math.random() * dictionary1.length);
     const randomIndex2 = Math.floor(Math.random() * dictionary2.length);
     const randomIndex3 = Math.floor(Math.random() * dictionary3.length);
