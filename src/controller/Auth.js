@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import { User } from "../model/User.js";
 import jwt from "jsonwebtoken";
-import { removeUserFromRoom } from "../helpers.js";
+import { removeUserFromRoom } from "../services/helpers.js";
 import redis from "../lib/databases/redis.js";
 import {
   changeUsernameSchema,
@@ -64,8 +64,8 @@ const sendOtpToEmail = async (email, otp) => {
       host: "sandbox.smtp.mailtrap.io",
       port: 2525,
       auth: {
-        user: process.env.temp_user_mail,
-        pass: process.env.temp_user_pass,
+        user: process.env.TEMP_USER_MAIL,
+        pass: process.env.TEMP_USER_PASS,
       },
     });
 

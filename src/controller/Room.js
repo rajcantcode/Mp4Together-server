@@ -1,5 +1,8 @@
 // Inserts room info in database
-import { generateRandomRoomID, removeUserFromRoom } from "../helpers.js";
+import {
+  generateRandomRoomID,
+  removeUserFromRoom,
+} from "../services/helpers.js";
 import { User } from "../model/User.js";
 import { Room } from "../model/Room.js";
 import { customAlphabet } from "nanoid";

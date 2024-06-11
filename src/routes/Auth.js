@@ -8,7 +8,7 @@ import {
   verifyOtp,
 } from "../controller/Auth.js";
 import { returnUser } from "../controller/User.js";
-import { authenticateToken } from "../helpers.js";
+import { authenticateToken } from "../services/helpers.js";
 const router = express.Router();
 
 router

@@ -1,14 +1,14 @@
-import { Room } from "./model/Room.js";
-import { User } from "./model/User.js";
+import { Room } from "../model/Room.js";
+import { User } from "../model/User.js";
 import jwt from "jsonwebtoken";
 import axios from "axios";
-import redis from "./lib/databases/redis.js";
+import redis from "../lib/databases/redis.js";
 import {
   dictionary1,
   dictionary2,
   dictionary3,
-} from "./lib/utils/constants.js";
-import { roomToAdmin, usernameToSocketId } from "./index.js";
+} from "../lib/utils/constants.js";
+import { roomToAdmin, usernameToSocketId } from "../index.js";
 
 // To authenticate jwt token
 export const authenticateToken = async (req, res, next, setCsp = false) => {
@@ -16,7 +16,7 @@ export const authenticateToken = async (req, res, next, setCsp = false) => {
   if (setCsp) {
     res.setHeader(
       "Content-Security-Policy",
-      `script-src '${process.env.FRONTENDURL}'`
+      `script-src '${process.env.FRONTEND_URL}'`
     );
   }
   if (!token) {

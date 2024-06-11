@@ -24,7 +24,7 @@ import {
   checkIfAdmin,
   removeUserFromRoom,
   getWithTimeout,
-} from "./helpers.js";
+} from "./services/helpers.js";
 
 import redis from "./lib/databases/redis.js";
 import connectToMongoose from "./lib/databases/mongo.js";
@@ -35,7 +35,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: [process.env.FRONTENDURL],
+    origin: [process.env.FRONTEND_URL],
     credentials: true,
     methods: ["GET", "POST"],
   },
@@ -48,7 +48,7 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(
   cors({
-    origin: [process.env.FRONTENDURL],
+    origin: [process.env.FRONTEND_URL],
     credentials: true, // Allow cookies to be sent with the request
   })
 );
@@ -643,6 +643,9 @@ io.on("connection", async (socket) => {
   socket.emit("ready");
 });
 
-server.listen(process.env.PORT, () => {
-  console.log("listening on *:", process.env.PORT);
+app.get("/", (req, res) => {
+  res.send("Hello World");
+});
+server.listen(process.env.PORT || 3000, () => {
+  console.log("listening on *:", process.env.PORT || 3000);
 });

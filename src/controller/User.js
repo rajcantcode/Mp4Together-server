@@ -3,7 +3,7 @@ import redis from "../lib/databases/redis.js";
 import Joi from "joi";
 import jwt from "jsonwebtoken";
 import { changeUsernameSchema } from "../lib/validators/UserSchema.js";
-import { getWithTimeout } from "../helpers.js";
+import { getWithTimeout } from "../services/helpers.js";
 
 export const returnUser = async (req, res) => {
   try {
