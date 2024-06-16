@@ -195,6 +195,52 @@ export const exitRoom = async (req, res) => {
   }
 };
 
+// This function is used to remove guest users from room and clear their cookie when their trial period expires
+export const userTrialExpired = async (req, res) => {
+  try {
+    // Remove the user from members array and admins array for the specific room
+    const mainRoomId = req.params.id;
+    const memberToRemove = req.user.name;
+    // If the operation is successful, the response msg to be sent to the user will be returned by "removeUserFromRoom" function
+    const { msg, roomObjId } = await removeUserFromRoom(
+      mainRoomId,
+      memberToRemove
+    );
+
+    const user = await User.findOneAndUpdate(
+      { username: memberToRemove },
+      {
+        $pull: {
+          roomIds: mainRoomId,
+          rooms: roomObjId,
+          socketIds: { room: mainRoomId },
+        },
+      },
+      { new: true }
+    );
+
+    // Cache user
+    await redis.hdel(
+      `${user.guest ? `guest:${user.username}` : `user:${user.username}`}`,
+      "roomIds",
+      "socketIds"
+    );
+
+    res.setHeader(
+      "Set-Cookie",
+      `accessToken=; Expires=${new Date(0).toUTCString()}; Path=/; HttpOnly`
+    );
+    res.status(200).json({ msg });
+  } catch (error) {
+    console.error(error);
+    if (error === "No such member exists in the room") {
+      res.status(404).json({ msg: "No such member exists in the room" });
+    } else {
+      res.status(501).json({ msg: "Internal server error" });
+    }
+  }
+};
+
 export const saveUrl = async (req, res) => {
   try {
     const roomId = req.params.id;
