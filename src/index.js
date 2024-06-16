@@ -10,7 +10,6 @@ import { Room } from "./model/Room.js";
 import { Server } from "socket.io";
 import helmet from "helmet";
 import cron from "node-cron";
-
 // Import routers
 import authRouter from "./routes/Auth.js";
 import roomRouter from "./routes/Room.js";
@@ -43,7 +42,7 @@ const io = new Server(server, {
 
 // app.disable("x-powered-by");
 app.use(helmet());
-helmet.hidePoweredBy({ setTo: "deeznuts" });
+app.use(helmet.hidePoweredBy({ setTo: "deeznuts" }));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(
@@ -71,7 +70,10 @@ app.use("/room", authenticateToken, roomRouter);
 app.use("/user", authenticateToken, userRouter);
 
 connectToMongoose().catch((err) => console.error(err));
-cron.schedule("*/10 * * * *", deleteOldDocuments);
+cron.schedule("*/10 * * * *", () => {
+  console.log("Running cron job");
+  deleteOldDocuments(io);
+});
 export const usernameToSocketId = {};
 const tempUsernameToSocketId = {};
 export const roomToAdmin = {};
@@ -562,6 +564,10 @@ io.on("connection", async (socket) => {
     socket.kickStatus = true;
   });
 
+  socket.on("set-trial-expired", () => {
+    socket.trialExpired = true;
+  });
+
   socket.on("error", (error) => {
     console.error("Socket error:", error);
   });
@@ -602,6 +608,11 @@ io.on("connection", async (socket) => {
         ? {
             type: "notification",
             message: `${socketUser} was kicked by ${roomToAdmin[socketUserMainRoom][0]}`,
+          }
+        : socket.trialExpired
+        ? {
+            type: "notification",
+            message: `${socketUser} was removed due to trial expiration`,
           }
         : {
             type: "notification",
