@@ -277,6 +277,7 @@ export const guestLogin = async (req, res) => {
     pipeline.hset(`guest:${newUser.username}`, {
       email: newUser.email,
       username: newUser.username,
+      guest: true,
     });
     pipeline.expire(`guest:${newUser.username}`, 3600);
     await pipeline.exec();
@@ -289,7 +290,7 @@ export const guestLogin = async (req, res) => {
         // path: "/",
         sameSite: "none",
         secure: true,
-        maxAge: 3600000,
+        maxAge: 4800000,
       })
       .json({ email: newUser.email, username: newUser.username });
   } catch (error) {
@@ -302,10 +303,26 @@ export const guestLogin = async (req, res) => {
   }
 };
 
-export const deleteOldDocuments = async () => {
+// delete guest accounts that are older than 1 hour
+// Check if they are in any rooms, if they are, then emit "trialExpire" event to the user which will initiate exit room process for the user
+export const deleteOldDocuments = async (io) => {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
-  await User.deleteMany({ guest: true, createdAt: { $lt: oneHourAgo } });
+  const guestUsers = await User.find({
+    guest: true,
+    createdAt: { $lt: oneHourAgo },
+  });
+  guestUsers.forEach(async (user) => {
+    if (user.roomIds.length > 0) {
+      user.roomIds.forEach((roomId) => {
+        const socketId = user.socketIds.find((s) => s.room === roomId).socketId;
+        io.to(socketId).emit("trialExpire");
+      });
+    } else {
+      await User.deleteOne({ username: user.username });
+      await redis.del(`guest:${user.username}`);
+    }
+  });
 };
 
 export const logoutUser = async (req, res) => {
@@ -318,7 +335,8 @@ export const logoutUser = async (req, res) => {
     // Get username from req, which is passed by "authenticateToken" middleware
     const username = req.user.name;
     const guest = req.user.guest;
-    // Verify if such a user exists
+
+    // Check if user is a guest and delete if true
     const user = await User.findOneAndDelete({ username, guest: true });
     await redis.del(`${guest ? `guest:${username}` : `user:${username}`}`);
   } catch (error) {
