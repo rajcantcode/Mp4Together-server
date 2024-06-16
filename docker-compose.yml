@@ -8,8 +8,6 @@ services:
       - VITE_BACKEND_URL=http://localhost:3000
       - VITE_FRONTEND_URL=localhost:5173
       - VITE_SFU_SERVER_URL=http://localhost:3001
-      - VITE_PEERJS_SERVER_URL=localhost
-      - VITE_PEERJS_PORT=9000
     env_file:
       - ../Mp4Together-client/.env
     ports:
@@ -52,12 +50,6 @@ services:
       - "6379:6379"
     volumes:
       - mp4together-redis-data:/data
-    restart: on-failure:5
-  peerjs:
-    container_name: mp4together-peerjs-server
-    image: peerjs/peerjs-server:1.1.0-rc.2
-    ports:
-      - "9000:9000"
     restart: on-failure:5
   sfu:
     container_name: mp4together-sfu
