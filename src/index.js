@@ -5,7 +5,6 @@ import http from "http";
 import cors from "cors";
 import bodyParser from "body-parser";
 import cookieParser from "cookie-parser";
-import { rateLimit } from "express-rate-limit";
 import { Room } from "./model/Room.js";
 import { Server } from "socket.io";
 import helmet from "helmet";
@@ -54,17 +53,6 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes)
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-  message: async () => {
-    return "Prease stoppu you are hurting me 😢";
-  },
-});
-
-app.use(limiter);
 app.use("/auth", authRouter);
 app.use("/room", authenticateToken, roomRouter);
 app.use("/user", authenticateToken, userRouter);
