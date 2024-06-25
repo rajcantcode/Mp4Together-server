@@ -89,6 +89,8 @@ export const changeUsername = async (req, res) => {
       .status(200)
       .cookie("accessToken", accessToken, {
         httpOnly: true,
+        domain: process.env.COOKIE_DOMAIN || "localhost",
+        path: "/",
         sameSite: "none",
         secure: true,
         maxAge: 3600000 * 24 * 7,

@@ -148,8 +148,8 @@ export const verifyOtp = async (req, res) => {
         .status(200)
         .cookie("accessToken", accessToken, {
           httpOnly: true,
-          // domain: "localhost",
-          // path: "/",
+          domain: process.env.COOKIE_DOMAIN || "localhost",
+          path: "/",
           sameSite: "none",
           secure: true,
           maxAge: 3600000 * 24 * 7,
@@ -237,8 +237,8 @@ export const loginUser = async (req, res) => {
       .status(200)
       .cookie("accessToken", accessToken, {
         httpOnly: true,
-        // domain: "localhost",
-        // path: "/",
+        domain: process.env.COOKIE_DOMAIN || "localhost",
+        path: "/",
         sameSite: "none",
         secure: true,
         maxAge: 3600000 * 24 * 7,
@@ -286,8 +286,8 @@ export const guestLogin = async (req, res) => {
       .status(200)
       .cookie("accessToken", accessToken, {
         httpOnly: true,
-        // domain: "localhost",
-        // path: "/",
+        domain: process.env.COOKIE_DOMAIN || "localhost",
+        path: "/",
         sameSite: "none",
         secure: true,
         maxAge: 4800000,
