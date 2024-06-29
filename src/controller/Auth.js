@@ -330,7 +330,7 @@ export const logoutUser = async (req, res) => {
     res.setHeader(
       "Set-Cookie",
       `accessToken=; Expires=${new Date(0).toUTCString()}; Path=/; Domain=${
-        process.env.COOKIE_DOMAIN
+        process.env.COOKIE_DOMAIN || "localhost"
       }; Secure; SameSite=None HttpOnly`
     );
     res.status(200).json({ msg: "Logged out successfully" });
