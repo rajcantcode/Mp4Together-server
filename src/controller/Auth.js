@@ -329,7 +329,9 @@ export const logoutUser = async (req, res) => {
   try {
     res.setHeader(
       "Set-Cookie",
-      `accessToken=; Expires=${new Date(0).toUTCString()}; Path=/; HttpOnly`
+      `accessToken=; Expires=${new Date(0).toUTCString()}; Path=/; Domain=${
+        process.env.COOKIE_DOMAIN
+      }; Secure; SameSite=None HttpOnly`
     );
     res.status(200).json({ msg: "Logged out successfully" });
     // Get username from req, which is passed by "authenticateToken" middleware
