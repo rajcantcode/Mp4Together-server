@@ -13,9 +13,11 @@ import {
 } from "../lib/validators/UserSchema.js";
 import { nouns, adjectives } from "../lib/utils/constants.js";
 import Joi from "joi";
-import nodemailer from "nodemailer";
+import Mailgun from "mailgun.js";
+import FormData from "form-data";
 
 const environment = process.env.NODE_ENV || "development";
+const mailVerification = process.env.MAIL_VERIFICATION || "";
 
 export const createUser = async (req, res) => {
   try {
@@ -29,12 +31,21 @@ export const createUser = async (req, res) => {
       email,
       password: hashedPass,
       username,
-      verified: environment === "development" ? true : false,
+      verified:
+        environment === "development" && mailVerification !== "check"
+          ? true
+          : false,
     });
     await newUser.save();
 
-    if (environment === "development") {
+    if (environment === "development" && mailVerification !== "check") {
       return res.status(201).json({ email: newUser.email, verified: true });
+    }
+    if (environment === "development" && mailVerification === "check") {
+      const otp = "123456";
+      await redis.set(`otp:${newUser.email}`, otp, "EX", 300);
+      const messageId = await sendOtpToEmail(newUser.email, otp);
+      return res.status(201).json({ email: newUser.email });
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -60,23 +71,23 @@ export const createUser = async (req, res) => {
 
 const sendOtpToEmail = async (email, otp) => {
   try {
-    const transport = nodemailer.createTransport({
-      host: "sandbox.smtp.mailtrap.io",
-      port: 2525,
-      auth: {
-        user: process.env.TEMP_USER_MAIL,
-        pass: process.env.TEMP_USER_PASS,
-      },
+    const mailgun = new Mailgun(FormData);
+    const client = mailgun.client({
+      username: "api",
+      key: process.env.MAILGUN_API_KEY,
     });
-
-    const message = await transport.sendMail({
-      from: process.env.MAILSENDER,
+    const messageData = {
+      from: `Mp4Together <${process.env.MAILGUN_USERNAME}>`,
       to: email,
       subject: "Verification code for mp4together",
       text: `Your verification code is ${otp}`,
-    });
+    };
+    const message = await client.messages.create(
+      process.env.MAILGUN_DOMAIN,
+      messageData
+    );
 
-    return message.messageId;
+    return message.status;
   } catch (error) {
     console.error(error);
     throw error;
