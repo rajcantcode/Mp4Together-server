@@ -22,7 +22,7 @@ services:
     environment:
       - FRONTEND_URL=http://localhost:5173
       - SFU_SERVER_URL=http://sfu:3001
-      - DB_URL=mongodb://mongo:27017/Watch2Gether
+      - DB_URL=mongodb://mongo:27017/Mp4Together
       - REDIS_URL=redis://redis:6379
       - PORT=3000
     env_file:
